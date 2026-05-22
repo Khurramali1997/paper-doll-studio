@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paper Doll Prototype Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <!-- Browser utilities for client-side processing -->
+  <script src="https://unpkg.com/ag-psd/dist/bundle.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+  <!-- Global drag & drop overlay -->
+  <div id="drag-drop-overlay" class="drag-drop-overlay">
+    <div class="overlay-content">
+      <span class="overlay-icon">📥</span>
+      <h2>Drop Master PSD or Wardrobe PNG</h2>
+      <p>Release to automatically process and import your file</p>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo">
+        <span class="logo-icon">✨</span>
+        <h1>Paper Doll <span>Studio</span></h1>
+      </div>
+      <div class="header-actions">
+        <button id="btn-theme" class="icon-btn" title="Toggle Theme">🌓</button>
+        <span class="badge">Prototype v1.0</span>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="workspace">
+      <!-- Left: Viewport (Doll Display) -->
+      <section class="viewport-section">
+        <div class="viewport-card">
+          <div class="viewport-toolbar">
+            <span class="status-indicator">● Active View</span>
+            <div class="viewport-controls">
+              <button id="btn-zoom-in" class="viewport-btn" title="Zoom In">＋</button>
+              <button id="btn-zoom-out" class="viewport-btn" title="Zoom Out">－</button>
+              <button id="btn-grid" class="viewport-btn active" title="Toggle Background Grid">Grid</button>
+              <button id="btn-reset-view" class="viewport-btn" title="Reset View">Reset</button>
+            </div>
+          </div>
+          
+          <div class="doll-wrapper" id="doll-wrapper">
+            <div class="doll-container" id="doll-container">
+              <!-- Layers will be dynamically rendered here via JavaScript -->
+              <div id="doll-layers-target"></div>
+              
+              <!-- Canvas shadow overlay -->
+              <div class="vignette"></div>
+            </div>
+          </div>
+
+          <div class="viewport-footer">
+            <span id="txt-dimension">Canvas: 768 × 768 px</span>
+            <span id="txt-model-base">Pipeline: Single Master PSD</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right: Control Panel Sidebar -->
+      <section class="control-panel">
+        <!-- Tabs -->
+        <div class="tabs-header">
+          <button class="tab-btn active" data-tab="wardrobe">
+            <span class="tab-icon">👕</span> Wardrobe
+          </button>
+          <button class="tab-btn" data-tab="appearance">
+            <span class="tab-icon">💇‍♀️</span> Appearance
+          </button>
+          <button class="tab-btn" data-tab="presets">
+            <span class="tab-icon">🎨</span> Presets
+          </button>
+          <button class="tab-btn" data-tab="calibration">
+            <span class="tab-icon">📐</span> Calibrate
+          </button>
+          <button class="tab-btn" data-tab="studio">
+            <span class="tab-icon">⚙️</span> Studio
+          </button>
+        </div>
+
+        <!-- Tab Contents -->
+        <div class="tabs-content">
+          <!-- Tab 1: Wardrobe -->
+          <div class="tab-pane active" id="tab-wardrobe">
+            <div id="wardrobe-options-container"></div>
+            <div id="depth-controls-container"></div>
+          </div>
+
+          <!-- Tab 2: Appearance -->
+          <div class="tab-pane" id="tab-appearance">
+            <div id="appearance-toggles-container"></div>
+            <div id="dye-sliders-container"></div>
+          </div>
+
+          <!-- Tab 3: Presets & Design Tools -->
+          <div class="tab-pane" id="tab-presets">
+            <div class="control-group">
+              <h3>Character Templates</h3>
+              <div class="vertical-btn-list" id="presets-container">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <div class="control-group">
+              <h3>Dye Swatches (Hair)</h3>
+              <div class="color-swatches" id="swatches-container">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <div class="control-group">
+              <h3>Design Operations</h3>
+              <div class="vertical-btn-list">
+                <button class="action-btn accent" id="btn-randomize">
+                  🎲 Randomize Outfit
+                </button>
+                <button class="action-btn danger" id="btn-reset">
+                  🔄 Reset Customizations
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab 4: Alignment Calibration -->
+          <div class="tab-pane" id="tab-calibration">
+            <div class="control-group">
+              <h3>Layer Alignment</h3>
+              <p class="group-desc">Select a layer type and use arrow buttons to tweak its offset relative to the character model template.</p>
+              
+              <div class="select-wrapper" style="margin-bottom: 1rem;">
+                <label for="select-calibrate-layer" style="font-size: 0.8rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">Target Layer Group:</label>
+                <select id="select-calibrate-layer" style="width: 100%; padding: 0.6rem; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); outline: none;">
+                  <!-- Options populated dynamically -->
+                </select>
+              </div>
+
+              <!-- Directional Pad -->
+              <div class="dpad-container" style="display: flex; flex-direction: column; align-items: center; margin: 1.5rem 0;">
+                <button class="dpad-btn" id="dpad-up" style="width: 44px; height: 44px; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; transition: all 0.2s;">▲</button>
+                <div style="display: flex; gap: 20px; margin: 8px 0;">
+                  <button class="dpad-btn" id="dpad-left" style="width: 44px; height: 44px; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; transition: all 0.2s;">◀</button>
+                  <button class="dpad-btn" id="dpad-right" style="width: 44px; height: 44px; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; transition: all 0.2s;">▶</button>
+                </div>
+                <button class="dpad-btn" id="dpad-down" style="width: 44px; height: 44px; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; transition: all 0.2s;">▼</button>
+              </div>
+
+              <!-- Pixel display -->
+              <div class="offset-display" style="display: flex; justify-content: space-around; background: rgba(0,0,0,0.15); border-radius: 8px; padding: 0.6rem; margin-bottom: 1rem; font-size: 0.9rem; font-weight: 600; border: 1px solid var(--border-glass);">
+                <div>X: <span id="val-calibrate-x" style="color: var(--accent-color);">0px</span></div>
+                <div>Y: <span id="val-calibrate-y" style="color: var(--accent-color);">0px</span></div>
+              </div>
+
+              <div class="horizontal-buttons" style="display: flex; gap: 0.5rem;">
+                <button class="action-btn" id="btn-calibrate-reset-layer" style="flex: 1; padding: 0.5rem 0; font-size: 0.8rem;">Reset Layer</button>
+                <button class="action-btn danger" id="btn-calibrate-reset-all" style="flex: 1; padding: 0.5rem 0; font-size: 0.8rem;">Reset All</button>
+              </div>
+            </div>
+
+            <div class="control-group">
+              <h3>Export Calibration Config</h3>
+              <p class="group-desc">Copy this offset configuration object into your game engine or codebase to align the assets permanently.</p>
+              <textarea id="txt-calibration-code" readonly style="width: 100%; height: 120px; background: var(--bg-secondary); border: 1px solid var(--border-glass); border-radius: 8px; padding: 0.5rem; color: var(--text-secondary); font-family: monospace; font-size: 0.75rem; resize: none; outline: none; margin-bottom: 0.6rem;"></textarea>
+              <button class="action-btn secondary" id="btn-copy-calibration" style="font-size: 0.8rem; padding: 0.5rem 0;">📋 Copy Config</button>
+            </div>
+          </div>
+
+          <!-- Tab 5: Studio Tools (PSD import, background removal, zip export) -->
+          <div class="tab-pane" id="tab-studio">
+            <!-- Master PSD section -->
+            <div class="control-group">
+              <h3>📁 Import Master PSD</h3>
+              <p class="group-desc">Drag and drop a master PSD (e.g. <code>character.psd</code>) to parse layers and initialize the project config entirely client-side.</p>
+              
+              <div class="file-drop-zone" id="psd-drop-zone">
+                <span class="drop-icon">📄</span>
+                <span class="drop-text">Drag & drop Master PSD here, or <span class="browse-link">click to browse</span></span>
+                <input type="file" id="input-psd" accept=".psd" style="display: none;">
+              </div>
+
+              <div id="psd-status" class="status-box" style="display: none;">
+                <div class="spinner-container">
+                  <div class="spinner"></div>
+                  <span id="txt-psd-status">Loading and parsing PSD...</span>
+                </div>
+                <div class="progress-bar-bg" id="psd-progress-bg" style="display: none;">
+                  <div class="progress-bar-fill" id="psd-progress-fill" style="width: 0%;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Ingest Wardrobe Asset section -->
+            <div class="control-group">
+              <h3>👘 Ingest Wardrobe Asset</h3>
+              <p class="group-desc">Drop a clothing texture here. It will be aligned to the character, cropped, and added as a new wardrobe option.</p>
+
+              <div class="select-wrapper" style="margin-bottom: 0.8rem;">
+                <label for="select-ingest-slot" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">Target Category/Slot:</label>
+                <select id="select-ingest-slot" style="width: 100%; padding: 0.6rem; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); outline: none;">
+                  <option value="topwear">Topwear (shirts, vests, coats)</option>
+                  <option value="bottomwear">Bottomwear (skirts, pants, belts)</option>
+                  <option value="legwear">Legwear (boots, greaves, pants)</option>
+                  <option value="handwear">Handwear (gloves, gauntlets, bracers)</option>
+                </select>
+              </div>
+
+              <div class="input-wrapper" style="margin-bottom: 0.8rem;">
+                <label for="txt-ingest-name" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">Display Name:</label>
+                <input type="text" id="txt-ingest-name" placeholder="e.g. Leather Plate Vest" style="width: 100%; padding: 0.6rem; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); outline: none; border-color: var(--border-glass);">
+              </div>
+
+              <div class="file-drop-zone" id="asset-drop-zone">
+                <span class="drop-icon">🖼️</span>
+                <span id="asset-drop-text" class="drop-text">Drag & drop PNG/JPG image here, or <span class="browse-link">click to browse</span></span>
+                <input type="file" id="input-asset" accept="image/*" style="display: none;">
+              </div>
+
+              <!-- BG removal options -->
+              <div class="bg-options-box" style="margin-top: 0.8rem; background: rgba(0,0,0,0.1); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+                <label class="switch-item" style="margin-bottom: 0.5rem;">
+                  <span class="switch-label" style="font-size: 0.75rem;">Instant Color Key Background Removal</span>
+                  <input type="checkbox" id="chk-chromakey" checked>
+                  <span class="slider"></span>
+                </label>
+
+                <div id="chromakey-controls" style="display: flex; gap: 10px; align-items: center; margin-bottom: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Key Color:</span>
+                  <input type="color" id="color-chromakey" value="#ffffff" style="background:none; border:none; width: 30px; height: 25px; cursor: pointer;">
+                  
+                  <span style="font-size: 0.75rem; color: var(--text-secondary); margin-left: 10px;">Tolerance:</span>
+                  <input type="range" id="range-chromakey" min="0" max="150" value="40" style="flex:1; height: 4px;">
+                </div>
+
+                <div class="divider" style="margin: 0.6rem 0;"></div>
+
+                <button class="action-btn" id="btn-ml-bg" style="font-size: 0.75rem; padding: 0.4rem 0;">
+                  ✨ Remove Background using AI (WASM Model)
+                </button>
+                <div id="ml-status" class="status-box" style="display: none; margin-top: 0.5rem;">
+                  <div class="spinner-container">
+                    <div class="spinner"></div>
+                    <span id="txt-ml-status">Initializing model...</span>
+                  </div>
+                </div>
+              </div>
+
+              <button class="action-btn accent" id="btn-ingest-submit" disabled style="margin-top: 0.8rem;">
+                📥 Process & Add to Wardrobe
+              </button>
+            </div>
+
+            <!-- Export Project section -->
+            <div class="control-group">
+              <h3>📦 Export Project Package</h3>
+              <p class="group-desc">Export all generated asset files and the updated configuration as a single, game-ready ZIP file.</p>
+              
+              <div class="vertical-btn-list">
+                <button class="action-btn secondary" id="btn-download-config">
+                  📄 Download doll_config.js
+                </button>
+                <button class="action-btn accent" id="btn-export-zip">
+                  ⚡ Export Project ZIP (All Assets)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>© 2026 Paper Doll Studio Prototype. Made with Antigravity AI.</p>
+    </footer>
+  </div>
+
+  <script src="doll_config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
