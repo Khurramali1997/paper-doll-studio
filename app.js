@@ -3,6 +3,12 @@ let localImageCache = {};
 let localBlobCache = {};
 let pendingAssetFile = null;
 let pendingAssetImage = null;
+const alignSettings = {
+  x: 0,
+  y: 0,
+  scale: 1.0,
+  opacity: 50
+};
 let mlBgModule = null;
 
 // Dynamic State Management
@@ -559,6 +565,18 @@ function renderDoll() {
 
     targetContainer.appendChild(img);
   });
+
+  // If we have a pending asset image and opacity is > 0, draw it as a preview overlay
+  if (pendingAssetImage && alignSettings.opacity > 0) {
+    const overlayImg = document.createElement('img');
+    overlayImg.src = pendingAssetImage.src;
+    overlayImg.className = 'doll-layer-img pending-alignment-overlay';
+    overlayImg.style.zIndex = 300;
+    overlayImg.style.opacity = alignSettings.opacity / 100;
+    overlayImg.style.transform = `translate(${alignSettings.x}px, ${alignSettings.y}px) scale(${alignSettings.scale})`;
+    overlayImg.style.pointerEvents = 'none'; // Ensure clicks pass through to container
+    targetContainer.appendChild(overlayImg);
+  }
 }
 
 // Tab Switching
@@ -1143,6 +1161,10 @@ function loadAndParsePSD(file) {
       txtPsdStatus.textContent = `PSD ${file.name} successfully imported!`;
       setTimeout(() => {
         psdStatus.style.display = 'none';
+        const detailsImport = document.getElementById('details-import-psd');
+        if (detailsImport) {
+          detailsImport.removeAttribute('open');
+        }
       }, 2500);
       
     } catch (err) {
@@ -1243,9 +1265,9 @@ assetDropZone.addEventListener('drop', (e) => {
   }
 });
 
-function handleAssetFileSelect(file) {
+async function handleAssetFileSelect(file) {
   pendingAssetFile = file;
-  assetDropText.textContent = `Selected: ${file.name}`;
+  assetDropText.innerHTML = `Selected: <strong>${file.name}</strong> <span class="browse-link" style="margin-left: 8px; font-weight: normal; font-size: 0.75rem;">(Change)</span>`;
   
   if (!txtIngestName.value) {
     const baseName = file.name.replace(/\.[^/.]+$/, "").replace(/_/g, ' ').replace(/-/g, ' ');
@@ -1253,6 +1275,40 @@ function handleAssetFileSelect(file) {
   }
   
   btnIngestSubmit.removeAttribute('disabled');
+
+  // Detect image dimensions to auto-select alignment mode
+  try {
+    const fileUrl = URL.createObjectURL(file);
+    const img = await loadImage(fileUrl);
+    pendingAssetImage = img;
+    
+    const docWidth = DOLL_CONFIG.canvas?.width || 768;
+    const docHeight = DOLL_CONFIG.canvas?.height || 768;
+    
+    const alignSelect = document.getElementById('select-ingest-align');
+    if (alignSelect) {
+      if (img.width === docWidth && img.height === docHeight) {
+        alignSelect.value = 'full';
+        console.log(`Detected template size (${img.width}x${img.height}). Auto-selected "Full Canvas 1:1".`);
+      } else {
+        alignSelect.value = 'auto';
+        console.log(`Detected custom size (${img.width}x${img.height}). Auto-selected "Auto-fit to Slot".`);
+      }
+    }
+    
+    // Auto-open alignment details panel for visual feedback
+    const detailsAlign = document.getElementById('details-alignment');
+    if (detailsAlign) {
+      detailsAlign.open = true;
+    }
+    
+    renderDoll();
+    if (typeof updateAlignUI === 'function') {
+      updateAlignUI();
+    }
+  } catch (e) {
+    console.warn("Could not check image dimensions for auto-alignment:", e);
+  }
 }
 
 // ML AI background removal trigger
@@ -1275,7 +1331,14 @@ document.getElementById('btn-ml-bg').addEventListener('click', async () => {
     
     const processedBlob = await mlBgModule.removeBackground(pendingAssetFile);
     pendingAssetFile = new File([processedBlob], pendingAssetFile.name, { type: 'image/png' });
-    assetDropText.textContent = `Processed with AI: ${pendingAssetFile.name}`;
+    assetDropText.innerHTML = `Processed with AI: <strong>${pendingAssetFile.name}</strong> <span class="browse-link" style="margin-left: 8px; font-weight: normal; font-size: 0.75rem;">(Change)</span>`;
+    
+    // Re-load pendingAssetImage
+    const fileUrl = URL.createObjectURL(pendingAssetFile);
+    const img = await loadImage(fileUrl);
+    pendingAssetImage = img;
+    renderDoll();
+    
     txtMlStatus.textContent = 'Background removed successfully!';
     setTimeout(() => {
       mlStatus.style.display = 'none';
@@ -1286,9 +1349,91 @@ document.getElementById('btn-ml-bg').addEventListener('click', async () => {
   }
 });
 
+// Dynamically generate a canvas representing the base/naked reference body of the character
+async function generateDynamicBodyReferenceCanvas() {
+  const canvas = document.createElement('canvas');
+  canvas.width = DOLL_CONFIG.canvas.width;
+  canvas.height = DOLL_CONFIG.canvas.height;
+  const ctx = canvas.getContext('2d');
+  
+  // Base layers: non-wardrobe layers, plus wardrobe layers that represent skin wear
+  const baseLayers = DOLL_CONFIG.layers.filter(layer => {
+    if (layer.category === 'wardrobe') {
+      return layer.optionValue === 'skin_wear';
+    }
+    return true;
+  });
+  
+  // Sort base layers by computed z-index
+  const mapped = baseLayers.map(l => {
+    let finalZ = l.z;
+    if (l.subcategory === 'handwear') {
+      const isClothing = l.optionValue !== 'skin_wear';
+      const isRight = l.id.endsWith('_r') || l.id.endsWith('_right') || l.name.toLowerCase().endsWith('_r') || l.name.toLowerCase().endsWith('_right') || l.id.includes('_r_') || l.id.includes('_right_');
+      const isLeft = l.id.endsWith('_l') || l.id.endsWith('_left') || l.name.toLowerCase().endsWith('_l') || l.name.toLowerCase().endsWith('_left') || l.id.includes('_l_') || l.id.includes('_left_');
+      
+      if (isRight) {
+        finalZ = isClothing ? 15 : 14;
+      } else if (isLeft) {
+        finalZ = isClothing ? 260 : 259;
+      } else if (state.wardrobeDepth['handwear']) {
+        const depth = state.wardrobeDepth['handwear'];
+        if (depth === 'behind') {
+          finalZ = isClothing ? 15 : 14;
+        } else if (depth === 'front_body') {
+          finalZ = isClothing ? 165 : 164;
+        } else if (depth === 'front_clothes') {
+          finalZ = isClothing ? 260 : 259;
+        }
+      }
+    }
+    return { ...l, computedZ: finalZ };
+  });
+  mapped.sort((a, b) => a.computedZ - b.computedZ);
+  
+  // Render each layer to the reference canvas
+  for (const layer of mapped) {
+    let isVisible = true;
+    if (layer.category !== 'wardrobe') {
+      const toggleGroupId = Object.keys(TOGGLE_GROUPS).find(groupId => 
+        TOGGLE_GROUPS[groupId].subcats.includes(layer.subcategory)
+      );
+      if (toggleGroupId !== undefined) {
+        isVisible = state.toggles[toggleGroupId] !== false;
+      }
+    }
+    if (!isVisible) continue;
+    
+    const imgSource = localImageCache[layer.file] || `public/assets/${layer.file}`;
+    try {
+      const img = await loadImage(imgSource);
+      
+      let x = 0;
+      let y = 0;
+      if (layer.category && state.offsets[layer.category]) {
+        x += state.offsets[layer.category].x;
+        y += state.offsets[layer.category].y;
+      }
+      if (layer.subcategory && state.offsets[layer.subcategory] && layer.subcategory !== layer.category) {
+        x += state.offsets[layer.subcategory].x;
+        y += state.offsets[layer.subcategory].y;
+      }
+      
+      ctx.drawImage(img, x, y, DOLL_CONFIG.canvas.width, DOLL_CONFIG.canvas.height);
+    } catch (e) {
+      console.warn(`Could not draw base layer ${layer.file} for reference body:`, e);
+    }
+  }
+  
+  return canvas;
+}
+
 // Process and submit wardrobe asset
 btnIngestSubmit.addEventListener('click', async () => {
-  if (!pendingAssetFile) return;
+  if (!pendingAssetFile) {
+    alert('Please select or drop an image asset first.');
+    return;
+  }
   
   const slot = selectIngestSlot.value;
   const displayName = txtIngestName.value.trim() || 'Custom Option';
@@ -1302,11 +1447,28 @@ btnIngestSubmit.addEventListener('click', async () => {
     const fileUrl = URL.createObjectURL(pendingAssetFile);
     const originalImg = await loadImage(fileUrl);
     
+    const docWidth = DOLL_CONFIG.canvas.width;
+    const docHeight = DOLL_CONFIG.canvas.height;
+    const alignMode = document.getElementById('select-ingest-align').value;
+    
+    const isManualAligned = alignSettings.x !== 0 || alignSettings.y !== 0 || alignSettings.scale !== 1.0;
+    const useAlignmentSettings = isManualAligned || alignMode === 'full';
+    
     const origCanvas = document.createElement('canvas');
-    origCanvas.width = originalImg.width;
-    origCanvas.height = originalImg.height;
     const origCtx = origCanvas.getContext('2d');
-    origCtx.drawImage(originalImg, 0, 0);
+    
+    if (useAlignmentSettings) {
+      origCanvas.width = docWidth;
+      origCanvas.height = docHeight;
+      origCtx.translate(docWidth / 2 + alignSettings.x, docHeight / 2 + alignSettings.y);
+      origCtx.scale(alignSettings.scale, alignSettings.scale);
+      origCtx.translate(-docWidth / 2, -docHeight / 2);
+      origCtx.drawImage(originalImg, 0, 0, docWidth, docHeight);
+    } else {
+      origCanvas.width = originalImg.width;
+      origCanvas.height = originalImg.height;
+      origCtx.drawImage(originalImg, 0, 0);
+    }
     
     // Apply Chroma Key
     if (document.getElementById('chk-chromakey').checked) {
@@ -1315,12 +1477,121 @@ btnIngestSubmit.addEventListener('click', async () => {
       applyChromaKey(origCanvas, keyColor, tolerance);
     }
     
-    const docWidth = DOLL_CONFIG.canvas.width;
-    const docHeight = DOLL_CONFIG.canvas.height;
+    // Apply Body Subtraction
+    if (document.getElementById('chk-subtract-body').checked) {
+      try {
+        // Dynamically build reference body canvas matching the current character model
+        const refCanvas = await generateDynamicBodyReferenceCanvas();
+        
+        // Draw reference body to a temp canvas of matching size
+        const scaledRefCanvas = document.createElement('canvas');
+        scaledRefCanvas.width = origCanvas.width;
+        scaledRefCanvas.height = origCanvas.height;
+        const scaledRefCtx = scaledRefCanvas.getContext('2d');
+        scaledRefCtx.drawImage(refCanvas, 0, 0, origCanvas.width, origCanvas.height);
+        
+        const origData = origCtx.getImageData(0, 0, origCanvas.width, origCanvas.height);
+        const pixels = origData.data;
+        const refData = scaledRefCtx.getImageData(0, 0, scaledRefCanvas.width, scaledRefCanvas.height).data;
+        
+        const width = origCanvas.width;
+        const height = origCanvas.height;
+        const dist = new Int32Array(width * height);
+        const nearestIdx = new Int32Array(width * height);
+        const maxDist = 999999;
+        
+        // Initialize distance and nearestIndex arrays
+        for (let i = 0; i < width * height; i++) {
+          if (refData[i * 4 + 3] > 10) {
+            dist[i] = 0;
+            nearestIdx[i] = i;
+          } else {
+            dist[i] = maxDist;
+            nearestIdx[i] = -1;
+          }
+        }
+        
+        // Pass 1: Top-left to bottom-right
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const idx = y * width + x;
+            if (dist[idx] > 0) {
+              let d = dist[idx];
+              let n = nearestIdx[idx];
+              
+              if (x > 0 && dist[idx - 1] + 1 < d) {
+                d = dist[idx - 1] + 1;
+                n = nearestIdx[idx - 1];
+              }
+              if (y > 0 && dist[idx - width] + 1 < d) {
+                d = dist[idx - width] + 1;
+                n = nearestIdx[idx - width];
+              }
+              dist[idx] = d;
+              nearestIdx[idx] = n;
+            }
+          }
+        }
+        
+        // Pass 2: Bottom-right to top-left
+        for (let y = height - 1; y >= 0; y--) {
+          for (let x = width - 1; x >= 0; x--) {
+            const idx = y * width + x;
+            if (dist[idx] > 0) {
+              let d = dist[idx];
+              let n = nearestIdx[idx];
+              
+              if (x < width - 1 && dist[idx + 1] + 1 < d) {
+                d = dist[idx + 1] + 1;
+                n = nearestIdx[idx + 1];
+              }
+              if (y < height - 1 && dist[idx + width] + 1 < d) {
+                d = dist[idx + width] + 1;
+                n = nearestIdx[idx + width];
+              }
+              dist[idx] = d;
+              nearestIdx[idx] = n;
+            }
+          }
+        }
+        
+        const tol = parseInt(document.getElementById('range-subtract-tolerance').value, 10);
+        const maxSearchRadius = 15; // pixels
+        
+        for (let i = 0; i < pixels.length; i += 4) {
+          const a = pixels[i+3];
+          if (a > 0) {
+            const pixelIdx = i / 4;
+            const d = dist[pixelIdx];
+            if (d <= maxSearchRadius) {
+              const nIdx = nearestIdx[pixelIdx];
+              if (nIdx >= 0) {
+                const r = pixels[i];
+                const g = pixels[i+1];
+                const b = pixels[i+2];
+                
+                const refR = refData[nIdx * 4];
+                const refG = refData[nIdx * 4 + 1];
+                const refB = refData[nIdx * 4 + 2];
+                
+                const diff = Math.abs(r - refR) + Math.abs(g - refG) + Math.abs(b - refB);
+                if (diff < tol) {
+                  pixels[i+3] = 0; // Make transparent
+                }
+              }
+            }
+          }
+        }
+        origCtx.putImageData(origData, 0, 0);
+      } catch (refErr) {
+        console.warn('Failed to subtract reference body:', refErr);
+        alert('Could not generate dynamic body reference for clothing isolation. Proceeding without subtraction.');
+      }
+    }
     
     let targetX = 0, targetY = 0;
     let targetWidth = docWidth, targetHeight = docHeight;
-    let isAlreadyAligned = (originalImg.width === docWidth && originalImg.height === docHeight);
+    let isAlreadyAligned = useAlignmentSettings || (originalImg.width === docWidth && originalImg.height === docHeight);
     
     let clothCropCanvas = null;
     
@@ -1382,7 +1653,7 @@ btnIngestSubmit.addEventListener('click', async () => {
     const finalDocCtx = finalDocCanvas.getContext('2d');
     
     if (isAlreadyAligned) {
-      finalDocCtx.drawImage(origCanvas, 0, 0);
+      finalDocCtx.drawImage(origCanvas, 0, 0, docWidth, docHeight);
     } else if (clothCropCanvas) {
       finalDocCtx.drawImage(
         clothCropCanvas,
@@ -1390,7 +1661,7 @@ btnIngestSubmit.addEventListener('click', async () => {
         targetX, targetY, targetWidth, targetHeight
       );
     } else {
-      finalDocCtx.drawImage(origCanvas, 0, 0);
+      finalDocCtx.drawImage(origCanvas, 0, 0, docWidth, docHeight);
     }
     
     const finalBlob = await canvasToBlob(finalDocCanvas);
@@ -1413,18 +1684,41 @@ btnIngestSubmit.addEventListener('click', async () => {
       optionValue: cleanName
     };
     
-    DOLL_CONFIG.layers.push(newLayer);
+    // Check if layer already exists (prevent duplicate layer options in array)
+    const existingLayerIndex = DOLL_CONFIG.layers.findIndex(l => l.id === cleanName);
+    if (existingLayerIndex >= 0) {
+      DOLL_CONFIG.layers[existingLayerIndex] = {
+        ...DOLL_CONFIG.layers[existingLayerIndex],
+        name: displayName,
+        file: filename
+      };
+    } else {
+      DOLL_CONFIG.layers.push(newLayer);
+    }
     
     const slotConfig = DOLL_CONFIG.wardrobe[slot];
     if (slotConfig) {
-      const skinWearOption = slotConfig.options.find(o => o.value === 'skin_wear');
-      const skinWearLayers = skinWearOption ? skinWearOption.layers : [];
+      const existingOptionIndex = slotConfig.options.findIndex(o => o.value === cleanName);
+      const includeUnderwear = document.getElementById('chk-ingest-underwear').checked;
+      const layers = [];
+      if (includeUnderwear) {
+        const skinWearOption = slotConfig.options.find(o => o.value === 'skin_wear');
+        if (skinWearOption) {
+          layers.push(...skinWearOption.layers);
+        }
+      }
+      layers.push(cleanName);
       
-      slotConfig.options.push({
-        value: cleanName,
-        name: displayName,
-        layers: [...skinWearLayers, cleanName]
-      });
+      if (existingOptionIndex < 0) {
+        slotConfig.options.push({
+          value: cleanName,
+          name: displayName,
+          layers: layers
+        });
+      } else {
+        slotConfig.options[existingOptionIndex].name = displayName;
+        slotConfig.options[existingOptionIndex].layers = layers;
+      }
     }
     
     state.wardrobe[slot] = cleanName;
@@ -1433,12 +1727,7 @@ btnIngestSubmit.addEventListener('click', async () => {
     renderDoll();
     updateCalibrateUI();
     
-    pendingAssetFile = null;
-    pendingAssetImage = null;
-    txtIngestName.value = '';
-    assetDropText.textContent = 'Drag & drop PNG/JPG image here, or click to browse';
-    inputAsset.value = '';
-    
+    // Keep pendingAssetFile and txtIngestName active so users can iteratively tweak parameters (tolerance, mode) and submit again
     alert(`Successfully processed and added "${displayName}" to wardrobe!`);
   } catch (err) {
     console.error(err);
@@ -1555,3 +1844,237 @@ buildUI();
 renderDoll();
 updateViewportTransform();
 updateCalibrateUI();
+
+// Toggle controls visibility based on checkboxes
+const chkChroma = document.getElementById('chk-chromakey');
+const divChroma = document.getElementById('chromakey-controls');
+const chkSubtract = document.getElementById('chk-subtract-body');
+const divSubtract = document.getElementById('subtract-body-controls');
+
+function updateVisibility() {
+  if (divChroma && chkChroma) {
+    divChroma.style.display = chkChroma.checked ? 'flex' : 'none';
+  }
+  if (divSubtract && chkSubtract) {
+    divSubtract.style.display = chkSubtract.checked ? 'flex' : 'none';
+  }
+}
+
+if (chkChroma) chkChroma.addEventListener('change', updateVisibility);
+if (chkSubtract) chkSubtract.addEventListener('change', updateVisibility);
+updateVisibility();
+
+// ============================================================================
+// Interactive Alignment Controls, Drag/Wheel Event Handlers, & Auto-Alignment
+// ============================================================================
+
+const rangeAlignX = document.getElementById('range-align-x');
+const rangeAlignY = document.getElementById('range-align-y');
+const rangeAlignScale = document.getElementById('range-align-scale');
+const rangeAlignOpacity = document.getElementById('range-align-opacity');
+
+const valAlignX = document.getElementById('val-align-x');
+const valAlignY = document.getElementById('val-align-y');
+const valAlignScale = document.getElementById('val-align-scale');
+const valAlignOpacity = document.getElementById('val-align-opacity');
+
+function updateDollCursor() {
+  if (pendingAssetImage && alignSettings.opacity > 0) {
+    dollContainer.style.cursor = 'move';
+  } else {
+    dollContainer.style.cursor = 'default';
+  }
+}
+
+function updateAlignUI() {
+  if (rangeAlignX) rangeAlignX.value = alignSettings.x;
+  if (rangeAlignY) rangeAlignY.value = alignSettings.y;
+  if (rangeAlignScale) rangeAlignScale.value = alignSettings.scale;
+  if (rangeAlignOpacity) rangeAlignOpacity.value = alignSettings.opacity;
+  
+  if (valAlignX) valAlignX.textContent = alignSettings.x;
+  if (valAlignY) valAlignY.textContent = alignSettings.y;
+  if (valAlignScale) valAlignScale.textContent = alignSettings.scale.toFixed(2);
+  if (valAlignOpacity) valAlignOpacity.textContent = alignSettings.opacity;
+  
+  // Update overlay styling directly if present to avoid full re-render lag
+  const overlay = document.querySelector('.pending-alignment-overlay');
+  if (overlay) {
+    overlay.style.transform = `translate(${alignSettings.x}px, ${alignSettings.y}px) scale(${alignSettings.scale})`;
+    overlay.style.opacity = alignSettings.opacity / 100;
+  }
+  updateDollCursor();
+}
+
+if (rangeAlignX) {
+  rangeAlignX.addEventListener('input', (e) => {
+    alignSettings.x = parseInt(e.target.value, 10);
+    updateAlignUI();
+  });
+}
+if (rangeAlignY) {
+  rangeAlignY.addEventListener('input', (e) => {
+    alignSettings.y = parseInt(e.target.value, 10);
+    updateAlignUI();
+  });
+}
+if (rangeAlignScale) {
+  rangeAlignScale.addEventListener('input', (e) => {
+    alignSettings.scale = parseFloat(e.target.value);
+    updateAlignUI();
+  });
+}
+if (rangeAlignOpacity) {
+  rangeAlignOpacity.addEventListener('input', (e) => {
+    alignSettings.opacity = parseInt(e.target.value, 10);
+    updateAlignUI();
+    // If opacity went from 0 to positive or vice-versa, re-render doll to add/remove overlay
+    renderDoll();
+  });
+}
+
+// Reset button
+const btnResetAlignment = document.getElementById('btn-reset-alignment');
+if (btnResetAlignment) {
+  btnResetAlignment.addEventListener('click', () => {
+    alignSettings.x = 0;
+    alignSettings.y = 0;
+    alignSettings.scale = 1.0;
+    alignSettings.opacity = 50;
+    updateAlignUI();
+    renderDoll();
+  });
+}
+
+// Interactive drag and scroll-wheel scaling on dollContainer
+let isDraggingOverlay = false;
+let startX = 0;
+let startY = 0;
+let initialX = 0;
+let initialY = 0;
+
+dollContainer.addEventListener('mousedown', (e) => {
+  // Only drag if there is a pending image and its opacity is > 0
+  if (!pendingAssetImage || alignSettings.opacity <= 0) return;
+  
+  isDraggingOverlay = true;
+  startX = e.clientX;
+  startY = e.clientY;
+  initialX = alignSettings.x;
+  initialY = alignSettings.y;
+  
+  dollContainer.style.cursor = 'grabbing';
+  e.preventDefault();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!isDraggingOverlay) return;
+  
+  const dx = e.clientX - startX;
+  const dy = e.clientY - startY;
+  
+  // Account for container zoom scale
+  const zoom = state.zoom || 1.0;
+  alignSettings.x = Math.round(initialX + dx / zoom);
+  alignSettings.y = Math.round(initialY + dy / zoom);
+  
+  updateAlignUI();
+});
+
+window.addEventListener('mouseup', () => {
+  if (isDraggingOverlay) {
+    isDraggingOverlay = false;
+    updateDollCursor();
+  }
+});
+
+// Add scroll wheel scaling
+dollContainer.addEventListener('wheel', (e) => {
+  if (!pendingAssetImage || alignSettings.opacity <= 0) return;
+  
+  e.preventDefault(); // Stop page scrolling
+  
+  const delta = -e.deltaY;
+  const step = 0.02;
+  let newScale = alignSettings.scale + (delta > 0 ? step : -step);
+  
+  // Cap between 0.5 and 2.0
+  newScale = Math.max(0.5, Math.min(2.0, newScale));
+  alignSettings.scale = parseFloat(newScale.toFixed(2));
+  
+  updateAlignUI();
+}, { passive: false });
+
+// Auto-align button logic
+const btnAutoAlign = document.getElementById('btn-auto-align');
+if (btnAutoAlign) {
+  btnAutoAlign.addEventListener('click', async () => {
+    if (!pendingAssetImage) {
+      alert('Please select or drop an image asset first.');
+      return;
+    }
+    
+    btnAutoAlign.setAttribute('disabled', 'true');
+    const origText = btnAutoAlign.textContent;
+    btnAutoAlign.textContent = '🤖 Calculating alignment...';
+    
+    try {
+      const refCanvas = await generateDynamicBodyReferenceCanvas();
+      const refBox = getBoundingBox(refCanvas);
+      if (!refBox) {
+        alert('Could not find character body reference contours. Make sure character layers are visible.');
+        return;
+      }
+      
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = pendingAssetImage.width;
+      tempCanvas.height = pendingAssetImage.height;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(pendingAssetImage, 0, 0);
+      
+      if (document.getElementById('chk-chromakey').checked) {
+        const keyColor = document.getElementById('color-chromakey').value;
+        const tolerance = parseInt(document.getElementById('range-chromakey').value, 10);
+        applyChromaKey(tempCanvas, keyColor, tolerance);
+      }
+      
+      const uploadedBox = getBoundingBox(tempCanvas);
+      if (!uploadedBox) {
+        alert('Could not isolate clothing character bounds. Please check your chroma key background removal settings.');
+        return;
+      }
+      
+      const scaleToUnified = 768 / pendingAssetImage.width;
+      const normBox = {
+        x: uploadedBox.x * scaleToUnified,
+        y: uploadedBox.y * scaleToUnified,
+        width: uploadedBox.width * scaleToUnified,
+        height: uploadedBox.height * scaleToUnified
+      };
+      
+      const cx_ref = refBox.x + refBox.width / 2;
+      const cy_ref = refBox.y + refBox.height / 2;
+      const cx_up = normBox.x + normBox.width / 2;
+      const cy_up = normBox.y + normBox.height / 2;
+      
+      let S = refBox.height / normBox.height;
+      S = Math.max(0.5, Math.min(2.0, S));
+      
+      const tx = cx_ref - 384 - S * (cx_up - 384);
+      const ty = cy_ref - 384 - S * (cy_up - 384);
+      
+      alignSettings.scale = parseFloat(S.toFixed(2));
+      alignSettings.x = Math.round(tx);
+      alignSettings.y = Math.round(ty);
+      
+      updateAlignUI();
+      renderDoll();
+    } catch (e) {
+      console.error(e);
+      alert('Error during auto-alignment: ' + e.message);
+    } finally {
+      btnAutoAlign.removeAttribute('disabled');
+      btnAutoAlign.textContent = origText;
+    }
+  });
+}

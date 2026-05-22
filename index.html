@@ -177,101 +177,185 @@
           <!-- Tab 5: Studio Tools (PSD import, background removal, zip export) -->
           <div class="tab-pane" id="tab-studio">
             <!-- Master PSD section -->
-            <div class="control-group">
-              <h3>📁 Import Master PSD</h3>
-              <p class="group-desc">Drag and drop a master PSD (e.g. <code>character.psd</code>) to parse layers and initialize the project config entirely client-side.</p>
-              
-              <div class="file-drop-zone" id="psd-drop-zone">
-                <span class="drop-icon">📄</span>
-                <span class="drop-text">Drag & drop Master PSD here, or <span class="browse-link">click to browse</span></span>
-                <input type="file" id="input-psd" accept=".psd" style="display: none;">
-              </div>
+            <details class="control-group" id="details-import-psd">
+              <summary style="cursor: pointer; font-weight: 600; font-size: 1rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                <span>📁 Import Master PSD</span>
+                <span class="details-toggle-icon" style="font-size: 0.8rem; color: var(--text-secondary);">▼</span>
+              </summary>
+              <div style="margin-top: 0.8rem;">
+                <p class="group-desc" style="margin-bottom: 0.6rem;">Drag and drop a master PSD (e.g. <code>character.psd</code>) to parse layers and initialize the project config entirely client-side.</p>
+                
+                <div class="file-drop-zone" id="psd-drop-zone" style="padding: 1rem; gap: 0.5rem;">
+                  <span class="drop-icon" style="font-size: 1.5rem;">📄</span>
+                  <span class="drop-text" style="font-size: 0.75rem;">Drag & drop Master PSD here, or <span class="browse-link">click to browse</span></span>
+                  <input type="file" id="input-psd" accept=".psd" style="display: none;">
+                </div>
 
-              <div id="psd-status" class="status-box" style="display: none;">
-                <div class="spinner-container">
-                  <div class="spinner"></div>
-                  <span id="txt-psd-status">Loading and parsing PSD...</span>
-                </div>
-                <div class="progress-bar-bg" id="psd-progress-bg" style="display: none;">
-                  <div class="progress-bar-fill" id="psd-progress-fill" style="width: 0%;"></div>
+                <div id="psd-status" class="status-box" style="display: none; margin-top: 0.5rem; padding: 0.5rem;">
+                  <div class="spinner-container" style="font-size: 0.75rem;">
+                    <div class="spinner" style="width: 14px; height: 14px; border-width: 1.5px;"></div>
+                    <span id="txt-psd-status">Loading and parsing PSD...</span>
+                  </div>
+                  <div class="progress-bar-bg" id="psd-progress-bg" style="display: none; margin-top: 0.4rem; height: 4px;">
+                    <div class="progress-bar-fill" id="psd-progress-fill" style="width: 0%;"></div>
+                  </div>
                 </div>
               </div>
-            </div>
+            </details>
 
             <!-- Ingest Wardrobe Asset section -->
             <div class="control-group">
               <h3>👘 Ingest Wardrobe Asset</h3>
-              <p class="group-desc">Drop a clothing texture here. It will be aligned to the character, cropped, and added as a new wardrobe option.</p>
+              <p class="group-desc" style="margin-bottom: 0.6rem;">Drop a clothing texture here. It will be aligned to the character, cropped, and added as a new wardrobe option.</p>
 
-              <div class="select-wrapper" style="margin-bottom: 0.8rem;">
-                <label for="select-ingest-slot" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">Target Category/Slot:</label>
-                <select id="select-ingest-slot" style="width: 100%; padding: 0.6rem; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); outline: none;">
-                  <option value="topwear">Topwear (shirts, vests, coats)</option>
-                  <option value="bottomwear">Bottomwear (skirts, pants, belts)</option>
-                  <option value="legwear">Legwear (boots, greaves, pants)</option>
-                  <option value="handwear">Handwear (gloves, gauntlets, bracers)</option>
-                </select>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-bottom: 0.6rem;">
+                <div class="select-wrapper">
+                  <label for="select-ingest-slot" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Target Slot:</label>
+                  <select id="select-ingest-slot" style="width: 100%; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.75rem; outline: none;">
+                    <option value="topwear">Topwear</option>
+                    <option value="bottomwear">Bottomwear</option>
+                    <option value="legwear">Legwear</option>
+                    <option value="handwear">Handwear</option>
+                  </select>
+                </div>
+
+                <div class="select-wrapper">
+                  <label for="select-ingest-align" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Alignment Mode:</label>
+                  <select id="select-ingest-align" style="width: 100%; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.75rem; outline: none;">
+                    <option value="auto">Auto-fit to Slot</option>
+                    <option value="full">Full Canvas 1:1</option>
+                  </select>
+                </div>
               </div>
 
-              <div class="input-wrapper" style="margin-bottom: 0.8rem;">
-                <label for="txt-ingest-name" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">Display Name:</label>
-                <input type="text" id="txt-ingest-name" placeholder="e.g. Leather Plate Vest" style="width: 100%; padding: 0.6rem; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); outline: none; border-color: var(--border-glass);">
+              <div class="input-wrapper" style="margin-bottom: 0.6rem;">
+                <label for="txt-ingest-name" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Display Name:</label>
+                <input type="text" id="txt-ingest-name" placeholder="e.g. Emerald Dress" style="width: 100%; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.75rem; outline: none; border-color: var(--border-glass);">
               </div>
 
-              <div class="file-drop-zone" id="asset-drop-zone">
-                <span class="drop-icon">🖼️</span>
-                <span id="asset-drop-text" class="drop-text">Drag & drop PNG/JPG image here, or <span class="browse-link">click to browse</span></span>
+              <div style="margin-bottom: 0.6rem; display: flex; align-items: center;">
+                <label class="switch-item" style="margin-bottom: 0; width: 100%;">
+                  <span class="switch-label" style="font-size: 0.72rem;">Keep default underwear (skinwear) underneath</span>
+                  <input type="checkbox" id="chk-ingest-underwear" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="file-drop-zone" id="asset-drop-zone" style="padding: 0.8rem 0.5rem; gap: 0.3rem;">
+                <span class="drop-icon" style="font-size: 1.4rem;">🖼️</span>
+                <span id="asset-drop-text" class="drop-text" style="font-size: 0.75rem; line-height: 1.2;">Drag & drop PNG/JPG here or <span class="browse-link">browse</span></span>
                 <input type="file" id="input-asset" accept="image/*" style="display: none;">
               </div>
 
+              <!-- Visual Alignment Adjuster -->
+              <details class="control-group" id="details-alignment" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+                <summary style="cursor: pointer; font-weight: 600; font-size: 0.75rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                  <span>📐 Interactive Alignment Adjuster</span>
+                  <span class="details-toggle-icon" style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
+                </summary>
+                <div style="margin-top: 0.6rem;">
+                  <button class="action-btn secondary" id="btn-auto-align" style="font-size: 0.72rem; padding: 0.35rem 0; margin-bottom: 0.5rem; border-radius: 6px; width: 100%;">
+                    🤖 Auto-Align to Body Mask
+                  </button>
+                  
+                  <p class="group-desc" style="margin-bottom: 0.5rem; font-size: 0.68rem; line-height: 1.3;">
+                    <strong>Tip:</strong> Drag on the preview to position, scroll wheel to scale.
+                  </p>
+
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
+                    <div>
+                      <label for="range-align-x" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Offset X: <span id="val-align-x">0</span>px</label>
+                      <input type="range" id="range-align-x" min="-200" max="200" value="0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
+                    </div>
+                    <div>
+                      <label for="range-align-y" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Offset Y: <span id="val-align-y">0</span>px</label>
+                      <input type="range" id="range-align-y" min="-200" max="200" value="0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
+                    </div>
+                  </div>
+
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                    <div>
+                      <label for="range-align-scale" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Scale: <span id="val-align-scale">1.00</span>x</label>
+                      <input type="range" id="range-align-scale" min="0.5" max="2.0" step="0.01" value="1.0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
+                    </div>
+                    <div>
+                      <label for="range-align-opacity" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Overlay Opacity: <span id="val-align-opacity">50</span>%</label>
+                      <input type="range" id="range-align-opacity" min="0" max="100" value="50" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
+                    </div>
+                  </div>
+
+                  <button class="action-btn" id="btn-reset-alignment" style="font-size: 0.68rem; padding: 0.25rem 0; margin-top: 0.5rem; border-radius: 6px; width: 100%;">
+                    Reset Alignment
+                  </button>
+                </div>
+              </details>
+
               <!-- BG removal options -->
-              <div class="bg-options-box" style="margin-top: 0.8rem; background: rgba(0,0,0,0.1); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
-                <label class="switch-item" style="margin-bottom: 0.5rem;">
-                  <span class="switch-label" style="font-size: 0.75rem;">Instant Color Key Background Removal</span>
+              <div class="bg-options-box" style="margin-top: 0.6rem; background: rgba(0,0,0,0.1); padding: 0.6rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+                <label class="switch-item" style="margin-bottom: 0.4rem;">
+                  <span class="switch-label" style="font-size: 0.72rem;">Instant Color Key Background Removal</span>
                   <input type="checkbox" id="chk-chromakey" checked>
                   <span class="slider"></span>
                 </label>
 
-                <div id="chromakey-controls" style="display: flex; gap: 10px; align-items: center; margin-bottom: 0.5rem;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Key Color:</span>
-                  <input type="color" id="color-chromakey" value="#ffffff" style="background:none; border:none; width: 30px; height: 25px; cursor: pointer;">
+                <div id="chromakey-controls" style="display: flex; gap: 8px; align-items: center; margin-bottom: 0.4rem; padding-left: 0.2rem;">
+                  <span style="font-size: 0.7rem; color: var(--text-secondary);">Color:</span>
+                  <input type="color" id="color-chromakey" value="#ffffff" style="background:none; border:none; width: 25px; height: 20px; cursor: pointer; padding: 0;">
                   
-                  <span style="font-size: 0.75rem; color: var(--text-secondary); margin-left: 10px;">Tolerance:</span>
-                  <input type="range" id="range-chromakey" min="0" max="150" value="40" style="flex:1; height: 4px;">
+                  <span style="font-size: 0.7rem; color: var(--text-secondary); margin-left: 5px;">Tol:</span>
+                  <input type="range" id="range-chromakey" min="0" max="150" value="40" style="flex:1; height: 3px;">
                 </div>
 
-                <div class="divider" style="margin: 0.6rem 0;"></div>
+                <div class="divider" style="margin: 0.4rem 0;"></div>
 
-                <button class="action-btn" id="btn-ml-bg" style="font-size: 0.75rem; padding: 0.4rem 0;">
+                <label class="switch-item" style="margin-bottom: 0.4rem;">
+                  <span class="switch-label" style="font-size: 0.72rem;">Isolate Clothing (Subtract Body Reference)</span>
+                  <input type="checkbox" id="chk-subtract-body">
+                  <span class="slider"></span>
+                </label>
+
+                <div id="subtract-body-controls" style="display: none; gap: 8px; align-items: center; margin-bottom: 0.4rem; padding-left: 0.2rem;">
+                  <span style="font-size: 0.7rem; color: var(--text-secondary);">Tol:</span>
+                  <input type="range" id="range-subtract-tolerance" min="0" max="200" value="60" style="flex:1; height: 3px;">
+                </div>
+
+                <div class="divider" style="margin: 0.4rem 0;"></div>
+
+                <button class="action-btn" id="btn-ml-bg" style="font-size: 0.72rem; padding: 0.3rem 0; border-radius: 6px;">
                   ✨ Remove Background using AI (WASM Model)
                 </button>
-                <div id="ml-status" class="status-box" style="display: none; margin-top: 0.5rem;">
-                  <div class="spinner-container">
-                    <div class="spinner"></div>
+                <div id="ml-status" class="status-box" style="display: none; margin-top: 0.4rem; padding: 0.4rem;">
+                  <div class="spinner-container" style="font-size: 0.7rem;">
+                    <div class="spinner" style="width: 12px; height: 12px; border-width: 1.5px;"></div>
                     <span id="txt-ml-status">Initializing model...</span>
                   </div>
                 </div>
               </div>
 
-              <button class="action-btn accent" id="btn-ingest-submit" disabled style="margin-top: 0.8rem;">
+              <button class="action-btn accent" id="btn-ingest-submit" disabled style="margin-top: 0.6rem; padding: 0.6rem 0; font-size: 0.8rem; border-radius: 6px;">
                 📥 Process & Add to Wardrobe
               </button>
             </div>
 
             <!-- Export Project section -->
-            <div class="control-group">
-              <h3>📦 Export Project Package</h3>
-              <p class="group-desc">Export all generated asset files and the updated configuration as a single, game-ready ZIP file.</p>
-              
-              <div class="vertical-btn-list">
-                <button class="action-btn secondary" id="btn-download-config">
-                  📄 Download doll_config.js
-                </button>
-                <button class="action-btn accent" id="btn-export-zip">
-                  ⚡ Export Project ZIP (All Assets)
-                </button>
+            <details class="control-group" id="details-export-package">
+              <summary style="cursor: pointer; font-weight: 600; font-size: 1rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                <span>📦 Export Project Package</span>
+                <span class="details-toggle-icon" style="font-size: 0.8rem; color: var(--text-secondary);">▼</span>
+              </summary>
+              <div style="margin-top: 0.8rem;">
+                <p class="group-desc" style="margin-bottom: 0.6rem;">Export all generated asset files and the updated configuration as a single, game-ready ZIP file.</p>
+                
+                <div class="vertical-btn-list" style="gap: 0.5rem;">
+                  <button class="action-btn secondary" id="btn-download-config" style="padding: 0.6rem 0; font-size: 0.8rem;">
+                    📄 Download doll_config.js
+                  </button>
+                  <button class="action-btn accent" id="btn-export-zip" style="padding: 0.6rem 0; font-size: 0.8rem;">
+                    ⚡ Export Project ZIP (All Assets)
+                  </button>
+                </div>
               </div>
-            </div>
+            </details>
           </div>
         </div>
       </section>

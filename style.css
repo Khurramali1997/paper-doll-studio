@@ -898,4 +898,21 @@ input[type="range"]::-webkit-slider-thumb:hover {
   to { transform: rotate(360deg); }
 }
 
+/* Collapsible sections styles */
+details.control-group summary {
+  list-style: none;
+  cursor: pointer;
+}
+details.control-group summary::-webkit-details-marker {
+  display: none;
+}
+details.control-group[open] summary .details-toggle-icon {
+  transform: rotate(180deg);
+}
+.details-toggle-icon {
+  transition: transform var(--transition-speed);
+  display: inline-block;
+}
+
+
 
