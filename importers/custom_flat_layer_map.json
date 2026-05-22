@@ -1,0 +1,35 @@
+{
+  "name": "Custom Flat Character",
+  "format": "custom_flat_v1",
+  "source_psd_pattern": "character.psd",
+  "description": "Maps PSD flat layer names to canonical rig slots. Used by custom_flat_psd_importer.",
+  "version": 1,
+
+  "layer_map": {
+    "hair_back": "hair_back",
+    "hair_front": "hair_front",
+    "skin_wear_legs": "legs",
+    "clothing_topwear": "clothing_topwear",
+    "clothing_bottomwear": "clothing_bottomwear",
+    "clothing_legwear": "clothing_legwear",
+    "clothing_handwear_l": "clothing_handwear_l",
+    "clothing_handwear_r": "clothing_handwear_r"
+  },
+
+  "composites": {
+    "head": ["body_neck", "body_ears_l", "body_ears_r", "body_face"],
+    "face": [
+      "eyes_white_l", "eyes_white_r",
+      "eyes_irides_l", "eyes_irides_r",
+      "eyes_eyelash_l", "eyes_eyelash_r",
+      "eyes_eyebrow_l", "eyes_eyebrow_r",
+      "body_nose", "body_mouth"
+    ],
+    "torso": ["skin_wear_top", "skin_wear_bottom"]
+  },
+
+  "splits": {
+    "left_arm":  { "source": "skin_wear_hands", "crop_pct": [0.5, 0.0, 1.0, 1.0] },
+    "right_arm": { "source": "skin_wear_hands", "crop_pct": [0.0, 0.0, 0.5, 1.0] }
+  }
+}

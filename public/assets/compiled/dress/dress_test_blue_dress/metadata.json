@@ -1,0 +1,106 @@
+{
+  "asset_id": "dress_test_blue_dress",
+  "display_name": "Test Blue Dress",
+  "category": "dress",
+  "compatible_pose": "front_standing_v1",
+  "compatible_body": "muscular_curvy_female_v1",
+  "layers": [
+    {
+      "name": "clothing_front",
+      "file": "clothing_front.png",
+      "z_index": 50
+    }
+  ],
+  "anchors_used": [
+    "neck",
+    "left_shoulder",
+    "right_shoulder",
+    "strap_left",
+    "strap_right",
+    "bust_left",
+    "bust_right",
+    "waist_left",
+    "waist_right",
+    "hip_left",
+    "hip_right",
+    "knee_left",
+    "knee_right",
+    "ankle_left",
+    "ankle_right",
+    "hem_left",
+    "hem_right"
+  ],
+  "fit": {
+    "applied": true,
+    "method": "piecewise",
+    "report": {
+      "valid": true,
+      "fit_quality": "good",
+      "iou": 0.4619,
+      "precision": 0.5088,
+      "recall": 0.8337,
+      "chamfer_distance": 15.06,
+      "garment_pixels": 123289,
+      "region_pixels": 75245,
+      "region_path": "/Volumes/Khurrum/hobby/paperdoll/base_rig/masks/body_silhouette.png",
+      "warnings": [],
+      "errors": []
+    },
+    "stable_anchors": {
+      "neck": [
+        384,
+        180
+      ],
+      "strap_left": [
+        345,
+        210
+      ],
+      "strap_right": [
+        423,
+        210
+      ],
+      "bust_left": [
+        320,
+        310
+      ],
+      "bust_right": [
+        448,
+        310
+      ],
+      "waist_left": [
+        318,
+        420
+      ],
+      "waist_right": [
+        446,
+        420
+      ],
+      "hip_left": [
+        300,
+        440
+      ],
+      "hip_right": [
+        468,
+        440
+      ],
+      "hem_left": [
+        280,
+        620
+      ],
+      "hem_right": [
+        488,
+        620
+      ]
+    },
+    "anchors_path": "fit_debug/anchors.json"
+  },
+  "validation_report": {
+    "valid": true,
+    "errors": [],
+    "warnings": [
+      "Auto-cropped background garbage (81313px) using dress_allowed_region.png."
+    ],
+    "face_overlap_pixels": 0,
+    "garbage_pixels": 81313
+  }
+}

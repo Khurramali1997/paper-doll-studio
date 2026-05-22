@@ -1,0 +1,91 @@
+{
+  "name": "Paper Doll Studio Flat PSD v0.1 Mapping",
+  "format": "flat_v1",
+  "description": "Maps flat PSD layer names (multiple naming conventions) to the canonical rig slot system. Supports character.psd (snake_case), clothed.psd, and naked.psd (spaced/kebab) naming variants.",
+  "version": 1,
+
+  "layer_map": {
+    "hair_back": "hair_back",
+    "back_hair": "hair_back",
+    "hair_front": "hair_front",
+    "front_hair": "hair_front",
+
+    "body_neck": "body_neck",
+    "neck": "body_neck",
+    "body_ears_l": "body_ears_l",
+    "ears_l": "body_ears_l",
+    "ears_left": "body_ears_l",
+    "body_ears_r": "body_ears_r",
+    "ears_r": "body_ears_r",
+    "ears_right": "body_ears_r",
+    "body_face": "body_face",
+    "face": "body_face",
+
+    "eyes_white_l": "eyes_white_l",
+    "eyewhite_l": "eyes_white_l",
+    "eyewhite_left": "eyes_white_l",
+    "eyes_white_r": "eyes_white_r",
+    "eyewhite_r": "eyes_white_r",
+    "eyewhite_right": "eyes_white_r",
+    "eyes_irides_l": "eyes_irides_l",
+    "irides_l": "eyes_irides_l",
+    "irides_left": "eyes_irides_l",
+    "eyes_irides_r": "eyes_irides_r",
+    "irides_r": "eyes_irides_r",
+    "irides_right": "eyes_irides_r",
+    "eyes_eyelash_l": "eyes_eyelash_l",
+    "eyelash_l": "eyes_eyelash_l",
+    "eyes_eyelash_r": "eyes_eyelash_r",
+    "eyelash_r": "eyes_eyelash_r",
+    "eyes_eyebrow_l": "eyes_eyebrow_l",
+    "eyebrow_l": "eyes_eyebrow_l",
+    "eyebrow_left": "eyes_eyebrow_l",
+    "eyes_eyebrow_r": "eyes_eyebrow_r",
+    "eyebrow_r": "eyes_eyebrow_r",
+    "eyebrow_right": "eyes_eyebrow_r",
+
+    "body_nose": "body_nose",
+    "nose": "body_nose",
+    "body_mouth": "body_mouth",
+    "mouth": "body_mouth",
+
+    "skin_wear_top": "skin_wear_top",
+    "skin_wear_bottom": "skin_wear_bottom",
+    "skin_wear_legs": "skin_wear_legs",
+    "legs": "skin_wear_legs",
+    "legwear": "skin_wear_legs",
+    "skin_wear_hands": "skin_wear_hands",
+    "handwear": "skin_wear_hands",
+
+    "clothing_topwear": "clothing_topwear",
+    "topwear": "clothing_topwear",
+    "clothing_bottomwear": "clothing_bottomwear",
+    "bottomwear": "clothing_bottomwear",
+    "clothing_legwear": "clothing_legwear",
+    "legwear_clothing": "clothing_legwear",
+
+    "clothing_handwear_l": "clothing_handwear_l",
+    "handwear_l": "clothing_handwear_l",
+    "handwear_left": "clothing_handwear_l",
+    "clothing_handwear_r": "clothing_handwear_r",
+    "handwear_r": "clothing_handwear_r",
+    "handwear_right": "clothing_handwear_r"
+  },
+
+  "composites": {
+    "head": ["body_neck", "body_ears_l", "body_ears_r", "body_face"],
+    "face": [
+      "eyes_white_l", "eyes_white_r",
+      "eyes_irides_l", "eyes_irides_r",
+      "eyes_eyelash_l", "eyes_eyelash_r",
+      "eyes_eyebrow_l", "eyes_eyebrow_r",
+      "body_nose", "body_mouth"
+    ],
+    "torso": ["skin_wear_top", "skin_wear_bottom"]
+  },
+
+  "splits": {
+    "left_arm":  { "source": "skin_wear_hands", "crop_pct": [0.5, 0.0, 1.0, 1.0] },
+    "right_arm": { "source": "skin_wear_hands", "crop_pct": [0.0, 0.0, 0.5, 1.0] }
+  }
+}

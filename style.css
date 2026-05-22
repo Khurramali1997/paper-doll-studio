@@ -269,6 +269,18 @@ body {
   transition: opacity 0.3s ease, filter 0.1s ease;
 }
 
+#anchor-overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+  z-index: 260;
+  display: none;
+  cursor: default;
+}
+
 .vignette {
   position: absolute;
   top: 0;
@@ -507,6 +519,18 @@ body {
 }
 .cloth-hand-bg {
   background: linear-gradient(135deg, #2f3542 0%, #57606f 100%);
+}
+.cloth-dress-bg {
+  background: linear-gradient(135deg, #e056fd 0%, #be2edd 100%);
+}
+.cloth-outerwear-bg {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+.cloth-skirt-bg {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+}
+.cloth-pants-bg {
+  background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
 }
 .none-bg {
   background-color: rgba(0, 0, 0, 0.2);

@@ -55,6 +55,9 @@
               <!-- Layers will be dynamically rendered here via JavaScript -->
               <div id="doll-layers-target"></div>
               
+              <!-- Anchor overlay for Smart Fit landmark display -->
+              <canvas id="anchor-overlay-canvas" width="768" height="768"></canvas>
+              
               <!-- Canvas shadow overlay -->
               <div class="vignette"></div>
             </div>
@@ -129,6 +132,21 @@
                 </button>
               </div>
             </div>
+
+            <div class="control-group">
+              <h3>Undo / Redo</h3>
+              <div class="vertical-btn-list" style="display: flex; flex-direction: row; gap: 0.5rem;">
+                <button class="action-btn" id="btn-undo" style="flex: 1; padding: 0.5rem 0; font-size: 0.8rem;">
+                  ↩ Undo
+                </button>
+                <button class="action-btn" id="btn-redo" style="flex: 1; padding: 0.5rem 0; font-size: 0.8rem;">
+                  ↪ Redo
+                </button>
+              </div>
+              <p class="group-desc" style="margin-top: 0.3rem; font-size: 0.65rem;">
+                Ctrl+Z to undo, Ctrl+Shift+Z to redo
+              </p>
+            </div>
           </div>
 
           <!-- Tab 4: Alignment Calibration -->
@@ -176,6 +194,24 @@
 
           <!-- Tab 5: Studio Tools (PSD import, background removal, zip export) -->
           <div class="tab-pane" id="tab-studio">
+            <!-- Save / Load Character State -->
+            <div class="control-group">
+              <h3>💾 Character State</h3>
+              <p class="group-desc">Save and load your current character customizations (wardrobe, dyes, toggles, offsets).</p>
+              <div style="display: flex; gap: 0.5rem;">
+                <button class="action-btn secondary" id="btn-save-state" style="flex: 1; padding: 0.5rem 0; font-size: 0.8rem;">
+                  💾 Download State JSON
+                </button>
+                <button class="action-btn" id="btn-load-state" style="flex: 1; padding: 0.5rem 0; font-size: 0.8rem;">
+                  📂 Load State JSON
+                </button>
+                <input type="file" id="input-load-state" accept=".json" style="display: none;">
+              </div>
+              <p class="group-desc" style="margin-top: 0.3rem; font-size: 0.65rem;">
+                State auto-saves to localStorage on every change and restores on page load.
+              </p>
+            </div>
+
             <!-- Master PSD section -->
             <details class="control-group" id="details-import-psd">
               <summary style="cursor: pointer; font-weight: 600; font-size: 1rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
@@ -214,18 +250,15 @@
                   <select id="select-ingest-slot" style="width: 100%; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.75rem; outline: none;">
                     <option value="topwear">Topwear</option>
                     <option value="bottomwear">Bottomwear</option>
+                    <option value="dress">Dress</option>
                     <option value="legwear">Legwear</option>
                     <option value="handwear">Handwear</option>
+                    <option value="outerwear">Outerwear</option>
+                    <option value="skirt">Skirt</option>
+                    <option value="pants">Pants</option>
                   </select>
                 </div>
 
-                <div class="select-wrapper">
-                  <label for="select-ingest-align" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Alignment Mode:</label>
-                  <select id="select-ingest-align" style="width: 100%; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.75rem; outline: none;">
-                    <option value="auto">Auto-fit to Slot</option>
-                    <option value="full">Full Canvas 1:1</option>
-                  </select>
-                </div>
               </div>
 
               <div class="input-wrapper" style="margin-bottom: 0.6rem;">
@@ -254,12 +287,41 @@
                   <span class="details-toggle-icon" style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
                 </summary>
                 <div style="margin-top: 0.6rem;">
-                  <button class="action-btn secondary" id="btn-auto-align" style="font-size: 0.72rem; padding: 0.35rem 0; margin-bottom: 0.5rem; border-radius: 6px; width: 100%;">
+                  <button class="action-btn secondary" id="btn-auto-align" style="font-size: 0.72rem; padding: 0.35rem 0; margin-bottom: 0.35rem; border-radius: 6px; width: 100%;">
                     🤖 Auto-Align to Body Mask
                   </button>
-                  
+
+                  <details id="details-smart-fit" style="margin-bottom: 0.5rem; background: rgba(255,255,255,0.015); padding: 0.5rem; border-radius: 6px; border: 1px dashed var(--border-glass);">
+                    <summary style="cursor: pointer; font-size: 0.7rem; color: var(--text-secondary); list-style: none;">
+                      🧪 Anchor Fit (Experimental)
+                    </summary>
+                    <div style="margin-top: 0.4rem;">
+                      <p class="group-desc" style="margin-bottom: 0.4rem; font-size: 0.65rem; line-height: 1.3; color: var(--text-secondary);">
+                        Anchor-based piecewise warp. Not part of the v0.1 manual flow — use the alignment controls below instead. Output is not consumed by the default ingest path.
+                      </p>
+                      <button class="action-btn accent" id="btn-smart-fit" style="font-size: 0.72rem; padding: 0.35rem 0; margin-bottom: 0.5rem; border-radius: 6px; width: 100%;">
+                        📐 Smart Fit to Rig (Anchors)
+                      </button>
+
+                      <div id="fit-status" class="status-box" style="display: none; margin-bottom: 0.5rem; padding: 0.35rem; font-size: 0.68rem;"></div>
+
+                      <button id="btn-toggle-fit-preview" style="display:none; font-size:0.68rem; padding:0.25rem 0; margin-bottom:0.35rem; border-radius:6px; width:100%; background:var(--bg-secondary); border:1px solid var(--border-glass); color:var(--text-primary); cursor:pointer;">
+                        Show Fitted
+                      </button>
+
+                      <button id="btn-toggle-anchor-edit" style="display:none; font-size:0.68rem; padding:0.25rem 0; margin-bottom:0.35rem; border-radius:6px; width:100%; background:var(--bg-secondary); border:1px solid var(--border-glass); color:var(--text-primary); cursor:pointer;">
+                        🔓 Anchor Edit: OFF
+                      </button>
+
+                      <button id="btn-confirm-anchors" style="display:none; font-size:0.68rem; padding:0.25rem 0; margin-bottom:0.35rem; border-radius:6px; width:100%; background:var(--bg-secondary); border:1px solid var(--border-glass); color:var(--text-primary); cursor:pointer;">
+                        ✅ Confirm Anchors
+                      </button>
+                    </div>
+                  </details>
+
+
                   <p class="group-desc" style="margin-bottom: 0.5rem; font-size: 0.68rem; line-height: 1.3;">
-                    <strong>Tip:</strong> Drag on the preview to position, scroll wheel to scale.
+                    <strong>Tip:</strong> Drag to position, wheel to scale uniformly, arrow keys to nudge (Shift = 10px). Scale X/Y are independent — handy when a garment is slightly too narrow or tall.
                   </p>
 
                   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
@@ -273,15 +335,36 @@
                     </div>
                   </div>
 
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                  <div style="margin-bottom: 0.4rem;">
+                    <label for="range-align-scale" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Scale (uniform): <span id="val-align-scale">1.00</span>x</label>
+                    <input type="range" id="range-align-scale" min="0.05" max="5.0" step="0.01" value="1.0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
+                  </div>
+
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
                     <div>
-                      <label for="range-align-scale" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Scale: <span id="val-align-scale">1.00</span>x</label>
-                      <input type="range" id="range-align-scale" min="0.5" max="2.0" step="0.01" value="1.0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
+                      <label for="range-align-scale-x" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Scale X: <span id="val-align-scale-x">1.00</span>x</label>
+                      <input type="range" id="range-align-scale-x" min="0.05" max="5.0" step="0.01" value="1.0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                     </div>
                     <div>
-                      <label for="range-align-opacity" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Overlay Opacity: <span id="val-align-opacity">50</span>%</label>
-                      <input type="range" id="range-align-opacity" min="0" max="100" value="50" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
+                      <label for="range-align-scale-y" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Scale Y: <span id="val-align-scale-y">1.00</span>x</label>
+                      <input type="range" id="range-align-scale-y" min="0.05" max="5.0" step="0.01" value="1.0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                     </div>
+                  </div>
+
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
+                    <div>
+                      <label for="num-align-width" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Width (px)</label>
+                      <input type="number" id="num-align-width" min="1" max="4096" step="1" value="768" style="width: 100%; font-size: 0.7rem; padding: 0.2rem 0.3rem; background: var(--bg-secondary); border: 1px solid var(--border-glass); border-radius: 4px; color: var(--text-primary);">
+                    </div>
+                    <div>
+                      <label for="num-align-height" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Height (px)</label>
+                      <input type="number" id="num-align-height" min="1" max="4096" step="1" value="768" style="width: 100%; font-size: 0.7rem; padding: 0.2rem 0.3rem; background: var(--bg-secondary); border: 1px solid var(--border-glass); border-radius: 4px; color: var(--text-primary);">
+                    </div>
+                  </div>
+
+                  <div>
+                    <label for="range-align-opacity" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Overlay Opacity: <span id="val-align-opacity">50</span>%</label>
+                    <input type="range" id="range-align-opacity" min="0" max="100" value="50" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                   </div>
 
                   <button class="action-btn" id="btn-reset-alignment" style="font-size: 0.68rem; padding: 0.25rem 0; margin-top: 0.5rem; border-radius: 6px; width: 100%;">
@@ -367,7 +450,6 @@
     </footer>
   </div>
 
-  <script src="doll_config.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

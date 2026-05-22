@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://paperdoll.studio/project-schema.json",
+  "title": "Paper Doll Project",
+  "description": "Canonical project format for Paper Doll Studio",
+  "type": "object",
+  "required": ["version", "canvas", "layers", "wardrobe"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Schema version number",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "layers": {
+      "type": "array",
+      "description": "All layer definitions in z-order",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "file", "z", "category"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "name": { "type": "string" },
+          "file": { "type": "string" },
+          "z": { "type": "integer" },
+          "category": { "type": "string", "enum": ["hair", "eyes", "face", "wardrobe"] },
+          "subcategory": { "type": "string" },
+          "toggleable": { "type": "boolean" },
+          "defaultVisible": { "type": "boolean" },
+          "dyeable": { "type": "boolean" },
+          "optionValue": { "type": "string" }
+        }
+      }
+    },
+    "wardrobe": {
+      "type": "object",
+      "description": "Wardrobe slot configurations",
+      "patternProperties": {
+        "^[a-z]+$": {
+          "type": "object",
+          "required": ["name", "options", "defaultValue"],
+          "properties": {
+            "name": { "type": "string" },
+            "defaultValue": { "type": "string" },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["value", "name", "layers"],
+                "properties": {
+                  "value": { "type": "string" },
+                  "name": { "type": "string" },
+                  "layers": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "theme": { "type": "string", "enum": ["dark", "light"] },
+        "zoom": { "type": "number", "minimum": 0.1 },
+        "showGrid": { "type": "boolean" },
+        "offsets": {
+          "type": "object",
+          "patternProperties": {
+            "^.*$": {
+              "type": "object",
+              "required": ["x", "y"],
+              "properties": {
+                "x": { "type": "integer" },
+                "y": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "description": "Project metadata",
+      "properties": {
+        "name": { "type": "string" },
+        "characterName": { "type": "string" },
+        "author": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "sourceFiles": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

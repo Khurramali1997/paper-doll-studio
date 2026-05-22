@@ -1,0 +1,29 @@
+{
+  "name": "See-through / VSeeFace Character",
+  "format": "see_through_v1",
+  "source_psd_pattern": "*_see_through*.psd",
+  "description": "⚠ EXPERIMENTAL — Maps nested group-path layers (See-through/VSeeFace format) to canonical rig slots. Layer map keys are guessed and MUST be verified against a real See-through output PSD. Requires real See-through PSD fixture.",
+  "version": 1,
+
+  "layer_map": {
+    "hair/back":       "hair_back",
+    "hair/front":      "hair_front",
+    "body/head":       "head",
+    "body/face":       "face",
+    "body/torso":      "torso",
+    "body/left_arm":   "left_arm",
+    "body/right_arm":  "right_arm",
+    "body/legs":       "legs",
+    "cloth/top":       "clothing_topwear",
+    "cloth/bottom":    "clothing_bottomwear",
+    "cloth/legwear":   "clothing_legwear",
+    "cloth/glove_l":   "clothing_handwear_l",
+    "cloth/glove_r":   "clothing_handwear_r"
+  },
+
+  "composites": {},
+  "splits": {},
+
+  "group_path_separator": "/",
+  "match_mode": "suffix"
+}

@@ -1,0 +1,286 @@
+{
+  "canvas": [
+    768,
+    768
+  ],
+  "pose": "front_standing_v1",
+  "body_archetype": "muscular_curvy_female_v1",
+  "anchors": {
+    "neck": [
+      384,
+      180
+    ],
+    "left_shoulder": [
+      304,
+      250
+    ],
+    "right_shoulder": [
+      472,
+      250
+    ],
+    "strap_left": [
+      345,
+      210
+    ],
+    "strap_right": [
+      423,
+      210
+    ],
+    "bust_left": [
+      320,
+      310
+    ],
+    "bust_right": [
+      448,
+      310
+    ],
+    "waist_left": [
+      318,
+      420
+    ],
+    "waist_right": [
+      446,
+      420
+    ],
+    "hip_left": [
+      300,
+      440
+    ],
+    "hip_right": [
+      468,
+      440
+    ],
+    "knee_left": [
+      296,
+      540
+    ],
+    "knee_right": [
+      472,
+      540
+    ],
+    "ankle_left": [
+      300,
+      660
+    ],
+    "ankle_right": [
+      468,
+      660
+    ],
+    "hem_left": [
+      280,
+      620
+    ],
+    "hem_right": [
+      488,
+      620
+    ]
+  },
+  "garment_anchors": {
+    "dress": {
+      "neck": [
+        384,
+        180
+      ],
+      "strap_left": [
+        345,
+        210
+      ],
+      "strap_right": [
+        423,
+        210
+      ],
+      "bust_left": [
+        320,
+        310
+      ],
+      "bust_right": [
+        448,
+        310
+      ],
+      "waist_left": [
+        318,
+        420
+      ],
+      "waist_right": [
+        446,
+        420
+      ],
+      "hip_left": [
+        300,
+        440
+      ],
+      "hip_right": [
+        468,
+        440
+      ],
+      "hem_left": [
+        280,
+        620
+      ],
+      "hem_right": [
+        488,
+        620
+      ]
+    },
+    "topwear": {
+      "neck": [
+        384,
+        180
+      ],
+      "left_shoulder": [
+        304,
+        250
+      ],
+      "right_shoulder": [
+        472,
+        250
+      ],
+      "waist_left": [
+        318,
+        420
+      ],
+      "waist_right": [
+        446,
+        420
+      ]
+    },
+    "top": {
+      "neck": [
+        384,
+        180
+      ],
+      "left_shoulder": [
+        304,
+        250
+      ],
+      "right_shoulder": [
+        472,
+        250
+      ],
+      "waist_left": [
+        318,
+        420
+      ],
+      "waist_right": [
+        446,
+        420
+      ]
+    },
+    "skirt": {
+      "waist_left": [
+        318,
+        420
+      ],
+      "waist_right": [
+        446,
+        420
+      ],
+      "hip_left": [
+        300,
+        440
+      ],
+      "hip_right": [
+        468,
+        440
+      ],
+      "hem_left": [
+        280,
+        620
+      ],
+      "hem_right": [
+        488,
+        620
+      ]
+    },
+    "pants": {
+      "waist_left": [
+        318,
+        420
+      ],
+      "waist_right": [
+        446,
+        420
+      ],
+      "hip_left": [
+        300,
+        440
+      ],
+      "hip_right": [
+        468,
+        440
+      ],
+      "knee_left": [
+        296,
+        540
+      ],
+      "knee_right": [
+        472,
+        540
+      ]
+    },
+    "legwear": {
+      "waist_left": [
+        318,
+        420
+      ],
+      "waist_right": [
+        446,
+        420
+      ],
+      "hip_left": [
+        300,
+        440
+      ],
+      "hip_right": [
+        468,
+        440
+      ],
+      "knee_left": [
+        296,
+        540
+      ],
+      "knee_right": [
+        472,
+        540
+      ]
+    },
+    "outerwear": {
+      "neck": [
+        384,
+        180
+      ],
+      "left_shoulder": [
+        304,
+        250
+      ],
+      "right_shoulder": [
+        472,
+        250
+      ],
+      "waist_left": [
+        318,
+        420
+      ],
+      "waist_right": [
+        446,
+        420
+      ],
+      "hip_left": [
+        300,
+        440
+      ],
+      "hip_right": [
+        468,
+        440
+      ],
+      "hem_left": [
+        280,
+        620
+      ],
+      "hem_right": [
+        488,
+        620
+      ]
+    }
+  }
+}

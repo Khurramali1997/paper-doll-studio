@@ -2,3 +2,10 @@ venv/
 __pycache__/
 .DS_Store
 *.pyc
+node_modules/
+*.egg-info/
+dist/
+.coverage
+htmlcov/
+.pytest_cache/
+

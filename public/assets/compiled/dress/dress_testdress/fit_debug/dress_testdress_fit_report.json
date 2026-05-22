@@ -1,0 +1,16 @@
+{
+  "valid": true,
+  "fit_quality": "marginal",
+  "iou": 0.2975,
+  "precision": 0.3044,
+  "recall": 0.929,
+  "chamfer_distance": 26.16,
+  "garment_pixels": 229668,
+  "region_pixels": 75245,
+  "region_path": "/Volumes/Khurrum/hobby/paperdoll/base_rig/masks/body_silhouette.png",
+  "warnings": [
+    "Low IoU (0.297) against reference region. Garment may not fit well.",
+    "Low precision (0.304): large garment portions extend beyond reference region."
+  ],
+  "errors": []
+}

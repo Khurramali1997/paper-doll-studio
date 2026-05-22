@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "paperdoll-studio"
+version = "1.0.0"
+description = "Paper Doll Studio — local-first character customization pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow>=10.0.0",
+    "psd-tools>=1.0.0",
+    "rembg[cpu]>=2.0.0",
+    "jsonschema>=4.20.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+python_files = ["test_*.py"]
