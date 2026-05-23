@@ -239,6 +239,36 @@
               </div>
             </details>
 
+            <!-- Rig Authoring section -->
+            <details class="control-group" id="details-rig-autodetect">
+              <summary style="cursor: pointer; font-weight: 600; font-size: 1rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                <span>🦴 Generate Rig from Body Silhouette</span>
+                <span class="details-toggle-icon" style="font-size: 0.8rem; color: var(--text-secondary);">▼</span>
+              </summary>
+              <div style="margin-top: 0.8rem;">
+                <p class="group-desc" style="margin-bottom: 0.6rem;">Drop a body silhouette PNG (front-standing, arms-down). Anatomical Y proportions and silhouette edge sampling produce a draft <code>rig.json</code>. Review and hand-adjust before committing.</p>
+
+                <div class="file-drop-zone" id="rig-drop-zone" style="padding: 1rem; gap: 0.5rem;">
+                  <span class="drop-icon" style="font-size: 1.5rem;">🧍</span>
+                  <span class="drop-text" style="font-size: 0.75rem;">Drag & drop silhouette PNG here, or <span class="browse-link">click to browse</span></span>
+                  <input type="file" id="input-rig-silhouette" accept="image/png,image/*" style="display: none;">
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-top: 0.5rem;">
+                  <div class="input-wrapper">
+                    <label for="txt-rig-pose" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Pose label:</label>
+                    <input type="text" id="txt-rig-pose" value="front_standing_v1" style="width: 100%; padding: 0.4rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">
+                  </div>
+                  <div class="input-wrapper">
+                    <label for="txt-rig-archetype" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Body archetype:</label>
+                    <input type="text" id="txt-rig-archetype" value="autodetected_v1" style="width: 100%; padding: 0.4rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">
+                  </div>
+                </div>
+
+                <div id="rig-autodetect-status" class="status-box" style="display: none; margin-top: 0.5rem; padding: 0.5rem; font-size: 0.72rem;"></div>
+              </div>
+            </details>
+
             <!-- Ingest Wardrobe Asset section -->
             <div class="control-group">
               <h3>👘 Ingest Wardrobe Asset</h3>
@@ -256,6 +286,8 @@
                     <option value="outerwear">Outerwear</option>
                     <option value="skirt">Skirt</option>
                     <option value="pants">Pants</option>
+                    <option value="shoes">Shoes</option>
+                    <option value="accessory">Accessory</option>
                   </select>
                 </div>
 
@@ -432,6 +464,15 @@
                 <div class="vertical-btn-list" style="gap: 0.5rem;">
                   <button class="action-btn secondary" id="btn-download-config" style="padding: 0.6rem 0; font-size: 0.8rem;">
                     📄 Download doll_config.js
+                  </button>
+                  <button class="action-btn secondary" id="btn-download-silhouette" style="padding: 0.6rem 0; font-size: 0.8rem;">
+                    🧍 Download Body Silhouette PNG
+                  </button>
+                  <button class="action-btn secondary" id="btn-download-reference-pack" style="padding: 0.6rem 0; font-size: 0.8rem;">
+                    🤖 Download AI Reference Pack (ZIP)
+                  </button>
+                  <button class="action-btn secondary" id="btn-download-guides" style="padding: 0.6rem 0; font-size: 0.8rem;">
+                    📐 Download Guide Templates (ZIP)
                   </button>
                   <button class="action-btn accent" id="btn-export-zip" style="padding: 0.6rem 0; font-size: 0.8rem;">
                     ⚡ Export Project ZIP (All Assets)

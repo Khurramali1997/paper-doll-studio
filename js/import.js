@@ -17,11 +17,81 @@ let mlBgModule = null;
 
 export function initImport(targetContainer) {
   wirePSDImport(targetContainer);
+  wireRigAutodetect();
   wireAssetIngest(targetContainer);
   wireMlBg(targetContainer);
   wireDragDrop(targetContainer);
   wireAlignment(targetContainer);
   wireAutoAlign(targetContainer);
+}
+
+function wireRigAutodetect() {
+  const dropZone = document.getElementById('rig-drop-zone');
+  const input = document.getElementById('input-rig-silhouette');
+  const status = document.getElementById('rig-autodetect-status');
+  if (!dropZone || !input) return;
+
+  function showStatus(html, color) {
+    if (!status) return;
+    status.style.display = 'block';
+    status.style.color = color || '';
+    status.innerHTML = html;
+  }
+
+  async function handle(file) {
+    if (!file) return;
+    showStatus(`<div class="spinner-container"><div class="spinner" style="width:14px;height:14px;border-width:1.5px;"></div><span>Analyzing ${file.name}…</span></div>`, '');
+    try {
+      const fd = new FormData();
+      fd.append('image', file);
+      const pose = document.getElementById('txt-rig-pose');
+      const arch = document.getElementById('txt-rig-archetype');
+      if (pose && pose.value.trim()) fd.append('pose', pose.value.trim());
+      if (arch && arch.value.trim()) fd.append('body_archetype', arch.value.trim());
+
+      const res = await fetch('/api/rig-autodetect', { method: 'POST', body: fd });
+      if (!res.ok) {
+        let detail = res.statusText;
+        try { const j = await res.json(); detail = j.detail || detail; } catch {}
+        throw new Error(`HTTP ${res.status}: ${detail}`);
+      }
+      const rig = await res.json();
+      const count = Object.keys(rig.anchors || {}).length;
+
+      const blob = new Blob([JSON.stringify(rig, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'rig_auto.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      const anchors = rig.anchors || {};
+      const previewKeys = ['neck', 'left_shoulder', 'right_shoulder', 'hip_left', 'hip_right', 'ankle_left', 'ankle_right'];
+      const lines = previewKeys.filter(k => anchors[k]).map(k => `  ${k}: [${anchors[k][0]}, ${anchors[k][1]}]`).join('\n');
+      showStatus(`✓ Detected ${count} anchors. Downloaded <code>rig_auto.json</code>.<br><pre style="margin:0.4rem 0 0;font-size:0.65rem;line-height:1.3;">${lines}</pre><span style="font-size:0.65rem;color:var(--text-secondary)">Review and hand-adjust before replacing <code>base_rig/rig.json</code>.</span>`, 'var(--text-primary)');
+    } catch (e) {
+      console.error(e);
+      showStatus(`✗ ${e.message}`, 'var(--danger-color)');
+    }
+  }
+
+  dropZone.addEventListener('click', () => input.click());
+  input.addEventListener('change', (e) => {
+    if (e.target.files.length) handle(e.target.files[0]);
+    e.target.value = '';
+  });
+
+  ['dragenter', 'dragover'].forEach(name =>
+    dropZone.addEventListener(name, (e) => { e.preventDefault(); dropZone.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(name =>
+    dropZone.addEventListener(name, (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); }));
+  dropZone.addEventListener('drop', (e) => {
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f && f.type.startsWith('image/')) handle(f);
+  });
 }
 
 // ===== PSD Import =====
@@ -214,9 +284,21 @@ async function loadAndParsePSD(file, targetContainer) {
       DOLL_CONFIG.layers = layersConfig;
       DOLL_CONFIG.wardrobe = wardrobeConfig;
 
+      const dollContainer = document.getElementById('doll-container');
+      if (dollContainer) {
+        dollContainer.style.width = `${docWidth}px`;
+        dollContainer.style.height = `${docHeight}px`;
+      }
+      const txtDimension = document.getElementById('txt-dimension');
+      if (txtDimension) {
+        txtDimension.textContent = `Canvas: ${docWidth} x ${docHeight} px`;
+      }
+
       document.getElementById('txt-model-base').textContent = `Pipeline: Local PSD (${file.name})`;
 
-      // Re-initialize everything
+      // Re-initialize everything (this also resets state.offsets so per-layer
+      // pixel offsets from the prior rig don't carry over to a differently
+      // sized canvas).
       const { initializeState } = await import('./state.js');
       initializeState();
 

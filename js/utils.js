@@ -5,11 +5,16 @@ export const KEYWORDS = {
   wardrobe: ['wear', 'cloth', 'top', 'bottom', 'leg', 'hand', 'glove', 'pants', 'shirt', 'skirt', 'shoe', 'sock']
 };
 
+// Order matters: more specific slots come first so "footwear" matches `shoes`
+// before it falls through to `legwear`'s `leg` keyword, etc.
 export const WARDROBE_SLOTS = {
+  shoes: ['shoe', 'boot', 'footwear', 'foot', 'feet'],
+  handwear: ['hand', 'glove', 'arm', 'sleeve'],
   topwear: ['top', 'shirt', 'jacket', 'vest', 'coat', 'chest'],
-  bottomwear: ['bottom', 'skirt', 'underwear', 'waist'],
-  legwear: ['leg', 'pant', 'sock', 'shoe', 'boot', 'foot', 'feet'],
-  handwear: ['hand', 'glove', 'arm', 'sleeve']
+  bottomwear: ['bottom', 'underwear', 'waist'],
+  skirt: ['skirt'],
+  pants: ['pant', 'trouser', 'jean'],
+  legwear: ['leg', 'sock', 'legging', 'stocking', 'tight'],
 };
 
 export function cleanLayerName(name) {

@@ -3,7 +3,7 @@ import { renderDoll, updateViewportTransform, updateDollCursor, pendingAssetImag
 import { buildUI, updateActiveOptionButton } from './js/wardrobe.js';
 import { initCalibration, setCalibrationTabActive, buildCalibrateOptions, updateCalibrateUI } from './js/calibration.js';
 import { initImport, updateAlignUI } from './js/import.js';
-import { downloadConfig, downloadStateJSON, exportZIP } from './js/export.js';
+import { downloadConfig, downloadStateJSON, exportZIP, downloadBodySilhouette, downloadReferencePack } from './js/export.js';
 import { initFitPreview, clearFitPreview } from './js/fit_preview.js';
 
 // DOM refs
@@ -211,6 +211,73 @@ function wireSaveLoad() {
   const btnDlConfig = document.getElementById('btn-download-config');
   if (btnDlConfig) {
     btnDlConfig.addEventListener('click', () => downloadConfig());
+  }
+
+  // Download body silhouette derived from the currently loaded rig
+  const btnDlSil = document.getElementById('btn-download-silhouette');
+  if (btnDlSil) {
+    btnDlSil.addEventListener('click', async () => {
+      const origText = btnDlSil.textContent;
+      btnDlSil.setAttribute('disabled', 'true');
+      btnDlSil.textContent = 'Compositing silhouette...';
+      try {
+        await downloadBodySilhouette();
+      } catch (err) {
+        console.error(err);
+        alert(`Failed to generate body silhouette: ${err.message}`);
+      } finally {
+        btnDlSil.removeAttribute('disabled');
+        btnDlSil.textContent = origText;
+      }
+    });
+  }
+
+  // Download AI conditioning reference pack (silhouette + outline + canny + depth + pose)
+  const btnDlRefPack = document.getElementById('btn-download-reference-pack');
+  if (btnDlRefPack) {
+    btnDlRefPack.addEventListener('click', async () => {
+      const origText = btnDlRefPack.textContent;
+      btnDlRefPack.setAttribute('disabled', 'true');
+      btnDlRefPack.textContent = 'Rendering channels...';
+      try {
+        await downloadReferencePack();
+      } catch (err) {
+        console.error(err);
+        alert(`Failed to generate reference pack: ${err.message}`);
+      } finally {
+        btnDlRefPack.removeAttribute('disabled');
+        btnDlRefPack.textContent = origText;
+      }
+    });
+  }
+
+  // Download authoring guide templates
+  const btnDlGuides = document.getElementById('btn-download-guides');
+  if (btnDlGuides) {
+    btnDlGuides.addEventListener('click', async () => {
+      const origText = btnDlGuides.textContent;
+      btnDlGuides.setAttribute('disabled', 'true');
+      btnDlGuides.textContent = 'Rendering guides...';
+      try {
+        const res = await fetch('/api/guide-templates.zip');
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'paperdoll_guides.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error(err);
+        alert(`Failed to download guide templates: ${err.message}`);
+      } finally {
+        btnDlGuides.removeAttribute('disabled');
+        btnDlGuides.textContent = origText;
+      }
+    });
   }
 
   // Export ZIP

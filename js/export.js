@@ -1,6 +1,110 @@
 import { DOLL_CONFIG, state, exportStateJSON } from './state.js';
 import { localImageCache, localBlobCache } from './render.js';
-import { downloadBlob } from './utils.js';
+import { downloadBlob, loadImage } from './utils.js';
+
+const SILHOUETTE_EXCLUDED_CATEGORIES = new Set(['hair']);
+const SILHOUETTE_FILL_RGB = [80, 80, 80];
+
+// For ML conditioning (MediaPipe pose + ONNX depth), we want a body image
+// with enough structure for the models to detect pose / estimate depth,
+// without anatomical pixels. Composite: face / neck / ears (head shape),
+// eye details (orientation cue for pose), and clothing layers (cover the
+// body and provide structure). Hair is included for head/neck orientation.
+const ML_BODY_EXCLUDED_CATEGORIES = new Set();
+
+export async function generateBodySilhouetteCanvas() {
+  const docW = DOLL_CONFIG.canvas.width;
+  const docH = DOLL_CONFIG.canvas.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = docW;
+  canvas.height = docH;
+  const ctx = canvas.getContext('2d');
+
+  // Union the alphas of every layer that occupies body space. Hair expands
+  // outside the body outline so it's excluded. Wardrobe layers stand in for
+  // the body shape when no skin/body layer exists in the PSD.
+  for (const layer of DOLL_CONFIG.layers) {
+    if (SILHOUETTE_EXCLUDED_CATEGORIES.has(layer.category)) continue;
+    const src = localImageCache[layer.file] || `public/assets/${layer.file}`;
+    try {
+      const img = await loadImage(src);
+      ctx.drawImage(img, 0, 0, docW, docH);
+    } catch (err) {
+      console.warn(`silhouette: could not load ${layer.file}:`, err);
+    }
+  }
+
+  // Strip RGB content. Output is a binary alpha mask filled with a neutral
+  // gray — no anatomical pixels remain.
+  const data = ctx.getImageData(0, 0, docW, docH);
+  const px = data.data;
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] > 10) {
+      px[i]     = SILHOUETTE_FILL_RGB[0];
+      px[i + 1] = SILHOUETTE_FILL_RGB[1];
+      px[i + 2] = SILHOUETTE_FILL_RGB[2];
+      px[i + 3] = 255;
+    } else {
+      px[i + 3] = 0;
+    }
+  }
+  ctx.putImageData(data, 0, 0);
+  return canvas;
+}
+
+export async function downloadBodySilhouette() {
+  const canvas = await generateBodySilhouetteCanvas();
+  const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+  downloadBlob(blob, 'body_silhouette.png');
+}
+
+export async function generateBodyCompositeCanvas() {
+  const docW = DOLL_CONFIG.canvas.width;
+  const docH = DOLL_CONFIG.canvas.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = docW;
+  canvas.height = docH;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, docW, docH);
+
+  // Composite every layer of the rig at full RGB. The PSDs we ingest are
+  // clothing-covered (no separate anatomy layers), so the composite is a
+  // dressed figure suitable for ML conditioning. Drawn at native pixel
+  // dimensions — no scaling so the ML models see the rig's intended pose.
+  const layers = [...DOLL_CONFIG.layers].sort((a, b) => (a.z || 0) - (b.z || 0));
+  for (const layer of layers) {
+    if (ML_BODY_EXCLUDED_CATEGORIES.has(layer.category)) continue;
+    const src = localImageCache[layer.file] || `public/assets/${layer.file}`;
+    try {
+      const img = await loadImage(src);
+      ctx.drawImage(img, 0, 0, docW, docH);
+    } catch (err) {
+      console.warn(`ml-body: could not load ${layer.file}:`, err);
+    }
+  }
+  return canvas;
+}
+
+export async function downloadReferencePack() {
+  const silCanvas = await generateBodySilhouetteCanvas();
+  const bodyCanvas = await generateBodyCompositeCanvas();
+  const silBlob = await new Promise(res => silCanvas.toBlob(res, 'image/png'));
+  const bodyBlob = await new Promise(res => bodyCanvas.toBlob(res, 'image/png'));
+
+  const fd = new FormData();
+  fd.append('image', silBlob, 'body_silhouette.png');
+  fd.append('body', bodyBlob, 'body_composite.png');
+
+  const res = await fetch('/api/reference-pack', { method: 'POST', body: fd });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const j = await res.json(); detail = j.detail || detail; } catch {}
+    throw new Error(`HTTP ${res.status}: ${detail}`);
+  }
+  const zipBlob = await res.blob();
+  downloadBlob(zipBlob, 'reference_pack.zip');
+}
 
 export function generateConfigJSString() {
   if (!DOLL_CONFIG.defaults) DOLL_CONFIG.defaults = {};

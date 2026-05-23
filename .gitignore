@@ -9,3 +9,6 @@ dist/
 htmlcov/
 .pytest_cache/
 
+# Downloaded ML model files (auto-fetched on first use)
+models/
+

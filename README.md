@@ -1,6 +1,6 @@
 # Paper Doll Studio
 
-Local-first character customization pipeline. Import PSD character rigs, manually align wardrobe PNGs over the body ghost, bake to compiled assets, and export portable doll projects.
+Local-first character customization pipeline. Import PSD character rigs, manually align wardrobe PNGs over the body ghost, bake to compiled assets, and export both finished projects and AI-ready conditioning packs (silhouette, depth, pose, edges) for downstream image-generation workflows.
 
 ## Quick Start
 
@@ -20,6 +20,10 @@ PSD Importer ──→ Base Rig ──→ Frontend ──→ Compiler ──→ 
                 rig.json     DOLL_CONFIG   compiled assets
                 masks/       wardrobe/     metadata.json
                 base_rig/    state.json    wardrobe_manifest.json
+                                                │
+                                                └─→ AI conditioning pack
+                                                    (silhouette + outline +
+                                                     canny + depth + pose)
 ```
 
 PSD ingestion path:
@@ -30,14 +34,23 @@ Garment ingestion path (v0.1):
 
 ## Key Features
 
-- **Unified category registry** — `compiler/category_registry.py` is the single source of truth for all 10 wardrobe slots (dress, topwear, bottomwear, skirt, pants, legwear, handwear, outerwear, shoes, accessory). All components import from here.
+- **Unified category registry** — `compiler/category_registry.py` is the single source of truth for all 10 wardrobe slots (dress, topwear, outerwear, bottomwear, skirt, pants, legwear, shoes, handwear, accessory). All components import from here.
 - **Natural-dims-centered bake** — `js/utils.js` exports `computeBakeGeometry` and `applyBakeTransform`; the bake and the live preview overlay both call the same helper so they cannot drift.
-- **Pixel-honest alignment** — Width/Height number inputs read and write the rendered pixel size directly (a 50×50 accessory renders at 50×50 px; a 768 × 768 dress fills the canvas). Independent Scale X / Scale Y for non-uniform fit; uniform Scale slider plus mouse-wheel zoom for ratio-preserving changes; arrow keys nudge by 1 px (Shift = 10 px).
+- **Pixel-honest alignment** — Width/Height number inputs read and write the rendered pixel size directly (a 50×50 accessory renders at 50×50 px; a 768×768 dress fills the canvas). Independent Scale X / Scale Y for non-uniform fit; uniform Scale slider plus mouse-wheel zoom for ratio-preserving changes; arrow keys nudge by 1 px (Shift = 10 px).
 - **Auto-shrink on load** — sources larger than the canvas auto-fit on import so nothing overflows by default; small sources keep their native pixel size.
 - **Canonical z-order** — new wardrobe layers receive their category's z value at ingest time (dress=205, topwear=210, outerwear=215, bottomwear=220, skirt/pants=225, legwear=230, shoes=235, handwear=240, accessory=245).
+- **PSD-aware canvas sizing** — the doll container resizes to match each imported PSD's dimensions; layers are kept at their native PSD resolution.
 - **Non-destructive validation** — `validate_asset` warns by default; `crop_to_allowed_region=True` is opt-in.
 - **Alpha-aware chroma key** — automatically skipped for images that already have transparency.
-- **Export ZIP** — bundles dynamic `project.json` (with current wardrobe state), `doll_config.js`, every wardrobe layer PNG, every compiled-asset folder referenced by `wardrobe_manifest.json` (metadata + preview + per-layer PNGs), and the core app files.
+- **Anchor-derived guide templates** — `compiler/guide_templates.py` renders per-garment authoring references (dress_bodycon, dress_flared, topwear, skirt, pants, legwear, handwear) as 768×768 PNGs in both human (labelled) and AI (label-free) variants. Polygons come from `rig.json` anchors so they always agree with the alignment lines.
+- **Silhouette-based rig autodetect** — `compiler/rig_autodetect.py` derives a draft `rig.json` (17 anchors, full garment-anchor schema) from a body silhouette PNG. UI under "Generate Rig from Body Silhouette". Output is a starting point; artist reviews.
+- **AI conditioning reference pack** — one-click ZIP of five channels per loaded rig:
+  - `silhouette.png` — filter-safe binary mask
+  - `outline.png` — 2 px contour stroke
+  - `canny.png` — `cv2.Canny` edge map
+  - `depth.png` — Depth Anything V2 ONNX monocular depth (real, not a proxy)
+  - `pose.png` — MediaPipe-detected 18-keypoint OpenPose stick figure
+- **Export ZIP** — bundles dynamic `project.json`, `doll_config.js`, every wardrobe layer PNG, every compiled asset folder referenced by `wardrobe_manifest.json`, and the core app files.
 
 ## Pipeline
 
@@ -73,6 +86,20 @@ Upload ──→ alignSettings (x, y, scaleX, scaleY)
                               wardrobe_manifest.json (updated)
 ```
 
+### AI Conditioning Reference Pack
+```
+Frontend composites:                    Backend (POST /api/reference-pack):
+  silhouette  (alpha union, gray fill)    ┌─ silhouette.png  (pass-through)
+  body        (RGB layers in z-order)     ├─ outline.png    (cv2.findContours)
+        │                                 ├─ canny.png      (cv2.Canny)
+        │                                 ├─ depth.png      (Depth Anything V2 ONNX)
+        └─→ POST both ────────────────────└─ pose.png       (MediaPipe BlazePose → OpenPose)
+                                               │
+                                          reference_pack.zip
+```
+
+First call downloads the ~10 MB MediaPipe task file and ~50 MB Depth Anything ONNX model to `models/` (gitignored). Subsequent calls reuse the cached files. If either model fails to load, the corresponding channel falls back to a silhouette-only approximation.
+
 ### Export
 ```
 DOLL_CONFIG ──→ generateConfigJSString() ──→ doll_config.js (in ZIP)
@@ -92,7 +119,12 @@ wardrobe_manifest.json ──→ iterate ──→ public/assets/compiled/.../{m
 │   ├── validate_asset.py        # Non-destructive validation
 │   ├── split_slots.py           # Z-order layer splitting
 │   ├── align_asset.py           # Bounding-box alignment for non-fitted categories
-│   └── build_base_rig.py        # Standalone base rig builder
+│   ├── build_base_rig.py        # Standalone base rig builder
+│   ├── guide_templates.py       # Authoring guide PNG renderer (human + AI)
+│   ├── rig_autodetect.py        # Silhouette → draft rig.json
+│   ├── reference_pack.py        # Silhouette + outline + canny + depth + pose ZIP
+│   ├── pose_estimator.py        # MediaPipe BlazePose → OpenPose mapper
+│   └── depth_estimator.py       # Depth Anything V2 ONNX wrapper
 ├── importers/                   # PSD import adapters
 │   ├── flat_psd_importer.py     # v0.1 flat PSD importer
 │   ├── flat_layer_map.json      # Layer name mapping + aliases
@@ -101,14 +133,19 @@ wardrobe_manifest.json ──→ iterate ──→ public/assets/compiled/.../{m
 │   ├── utils.js                 # Bake helpers + chroma key + name cleaning
 │   ├── state.js                 # DOLL_CONFIG runtime state
 │   ├── render.js                # Canvas rendering + pending overlay
-│   ├── import.js                # PSD + garment ingestion + alignment UI
+│   ├── import.js                # PSD + garment ingestion + alignment UI + rig autodetect
 │   ├── wardrobe.js              # Wardrobe panel
 │   ├── calibration.js           # Per-layer color/offset adjustments
-│   └── export.js                # ZIP export
-├── server.py                    # FastAPI backend (POST /api/compile-asset)
+│   └── export.js                # ZIP export + silhouette + reference pack
+├── server.py                    # FastAPI backend
+│                                #   POST /api/compile-asset
+│                                #   POST /api/reference-pack
+│                                #   POST /api/rig-autodetect
+│                                #   GET  /api/guide-templates.zip
 ├── base_rig/                    # Generated base rig
 │   ├── rig.json                 # Anchors, canvas, garment regions
 │   └── masks/                   # Body silhouette + per-category allowed regions
+├── models/                      # Downloaded ML models (gitignored)
 ├── public/assets/               # Layer PNGs + compiled assets
 ├── python/tests/                # Python test suite
 ├── tests/                       # JS test suite
@@ -149,7 +186,7 @@ npx vitest run
 venv/bin/python -m pytest && npx vitest run
 ```
 
-105 total tests (61 Python + 44 JS).
+133 total tests (89 Python + 44 JS). The estimator unit tests mock model inference; no model downloads occur during `pytest`.
 
 ## Importing Garments
 
@@ -160,6 +197,39 @@ venv/bin/python -m pytest && npx vitest run
 5. Adjust over the body ghost: drag to position; mouse-wheel to scale uniformly; arrow keys to nudge (Shift for 10 px); Scale X / Scale Y sliders or the Width / Height pixel inputs for precise sizing; click **Auto-Align to Body Mask** to size and center against the body's bounding box.
 6. (Optional) Toggle **Color Key Background Removal** or **Subtract Body Reference** for chroma-key or body-mask cleanup.
 7. Click **Process & Add to Wardrobe**. The Python backend runs `normalize_canvas`, `validate_asset`, and `split_slots`, writes the compiled asset under `public/assets/compiled/<category>/<asset_id>/`, updates `wardrobe_manifest.json`, and the new option appears in the wardrobe panel.
+
+## Authoring Tools
+
+### Generate Rig from Body Silhouette
+
+Drop a body silhouette PNG into the "🦴 Generate Rig from Body Silhouette" section of the Importer tab. The backend derives 17 anchors (neck, shoulders, strap, bust, waist, hips, knees, ankles, hem) from the silhouette's width profile + anatomical Y proportions and returns a draft `rig.json`. The output is a starting point — review and hand-adjust before replacing `base_rig/rig.json`.
+
+### Download Guide Templates
+
+The Export Project Package section's "📐 Download Guide Templates (ZIP)" button produces seven per-garment PNGs in two variants:
+
+- `human/<id>.png` — title, alignment lines (waist/hips merged when within 25 px), red anchor dots, color-coded limb segments, 2 px canvas border. For human artists.
+- `ai/<id>.png` — silhouette + region tint only. No text, dots, or border. For upstream image-generation models.
+
+Guides cover `dress_bodycon`, `dress_flared`, `topwear`, `skirt`, `pants`, `legwear`, `handwear`. Each region is a polygon defined from `rig.json` anchors, so regions and alignment lines cannot disagree.
+
+### Download Body Silhouette
+
+The "🧍 Download Body Silhouette PNG" button composes the alpha union of every non-hair layer in the loaded rig, strips RGB, and fills with neutral gray. The output is a filter-safe binary mask — no anatomical pixels exist in the file. Useful as a tracing layer in any image editor or as a ControlNet "scribble" / "mask" input.
+
+### Download AI Reference Pack
+
+The "🤖 Download AI Reference Pack (ZIP)" button produces five conditioning channels ready for ControlNet workflows:
+
+| Channel        | Backend                                | ControlNet target          |
+|----------------|----------------------------------------|----------------------------|
+| `silhouette.png` | Frontend alpha union, gray fill       | Scribble / mask / inpaint  |
+| `outline.png`    | `cv2.findContours` 2 px stroke         | Lineart / scribble         |
+| `canny.png`      | `cv2.Canny` edge map                   | Canny edge model           |
+| `depth.png`      | Depth Anything V2 ONNX (518×518 → uint8) | Depth model              |
+| `pose.png`       | MediaPipe BlazePose → 18-keypoint OpenPose stick figure | OpenPose model |
+
+First call downloads the ~10 MB MediaPipe model and ~50 MB Depth Anything ONNX model to `models/` (one-time, cached). Filter safety: silhouette/outline/canny/depth all read from the binary mask only; pose is a colored stick figure with no body content; the body composite used as ML input never leaves localhost.
 
 ## Export
 
@@ -176,8 +246,10 @@ Click **Export Project (ZIP)** to download `paperdoll_project.zip` containing:
 - All compiler modules share `category_registry.py` — no hardcoded lists
 - v0.1 manual-placement flow with natural-dims-centered bake and pixel-honest inputs
 - Live preview and bake share the same transform helper (`applyBakeTransform`) — preview and output cannot drift
-- Canonical z-order applied at ingest
-- Non-destructive validation by default
-- Alpha-aware chroma key (auto-skip for transparent PNGs)
-- Compiler output integrated with frontend rendering and ZIP export
-- 105 passing tests
+- Canonical z-order applied at ingest; `shoes` / `skirt` / `pants` promoted to first-class JS wardrobe slots
+- PSD-aware canvas resize on import
+- Non-destructive validation by default; alpha-aware chroma key
+- Anchor-derived guide template polygons in human + AI variants
+- Silhouette-based rig autodetect with full schema output
+- AI conditioning reference pack with real MediaPipe pose + Depth Anything depth
+- 133 passing tests

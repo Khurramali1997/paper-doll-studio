@@ -14,12 +14,23 @@ from pathlib import Path
 
 import mimetypes
 
+from typing import Optional
+
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from compiler.category_registry import ALL_CATEGORIES
 from compiler.compiler import AssetCompiler
+from compiler.guide_templates import build_guides_zip
+from compiler.rig_autodetect import detect_anchors, build_rig
+from compiler.reference_pack import build_reference_pack
+
+import io as _io
+import json as _json
+from PIL import Image as _PILImage
+
+BASE_RIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "base_rig")
 
 app = FastAPI(title="Paper Doll Studio API")
 
@@ -138,6 +149,84 @@ async def compile_asset(
                 os.unlink(tmp_path)
             except Exception:
                 pass
+
+
+@app.post("/api/rig-autodetect")
+async def rig_autodetect(
+    image: UploadFile = File(...),
+    pose: str = Form("front_standing_v1"),
+    body_archetype: str = Form("autodetected_v1"),
+):
+    if not image.filename:
+        raise HTTPException(400, "No image file provided")
+    try:
+        content = await image.read()
+        img = _PILImage.open(_io.BytesIO(content))
+        anchors = detect_anchors(img)
+        rig = build_rig(
+            anchors,
+            canvas=(img.width, img.height),
+            pose=pose,
+            body_archetype=body_archetype,
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Autodetect failed: {e}")
+    return JSONResponse(
+        rig,
+        headers={"Content-Disposition": 'attachment; filename="rig_auto.json"'},
+    )
+
+
+@app.post("/api/reference-pack")
+async def reference_pack(
+    image: UploadFile = File(...),
+    body: Optional[UploadFile] = File(None),
+):
+    """Build the ControlNet/AI conditioning pack.
+
+    Form fields:
+      image: silhouette PNG (binary mask, filter-safe). Required.
+      body:  optional body composite (face + clothing, no anatomy) used as
+             input for MediaPipe pose + ONNX depth. Without it, pose falls
+             back to rig.json anchors and depth falls back to a distance-
+             transform proxy.
+    """
+    if not image.filename:
+        raise HTTPException(400, "No silhouette image provided")
+    try:
+        sil = _PILImage.open(_io.BytesIO(await image.read()))
+        body_img = _PILImage.open(_io.BytesIO(await body.read())) if (body and body.filename) else None
+        anchors = None
+        rig_path = os.path.join(BASE_RIG_DIR, "rig.json")
+        if os.path.exists(rig_path):
+            try:
+                with open(rig_path) as f:
+                    anchors = _json.load(f).get("anchors")
+            except Exception:
+                anchors = None
+        data = build_reference_pack(sil, anchors=anchors, body_composite=body_img)
+    except Exception as e:
+        raise HTTPException(500, f"Reference pack failed: {e}")
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="reference_pack.zip"'},
+    )
+
+
+@app.get("/api/guide-templates.zip")
+async def guide_templates_zip():
+    try:
+        data = build_guides_zip(BASE_RIG_DIR)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to render guide templates: {e}")
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="paperdoll_guides.zip"'},
+    )
 
 
 @app.get("/{full_path:path}")
