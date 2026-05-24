@@ -1843,6 +1843,30 @@ async function loadAndParsePSD(file, targetContainer) {
       buildCalibrateOptions();
       renderDoll(targetContainer);
       updateViewportTransform(document.getElementById('doll-container'));
+
+      // Reset the import/ingest state so the new character starts fresh.
+      // Without this, a garment from the previous session stays queued and
+      // its alignment/cleanup settings carry over to the new rig.
+      setPendingAsset(null, null);
+      setPendingPreviewImage(null);
+      alignSettings.x = 0;
+      alignSettings.y = 0;
+      alignSettings.scaleX = 1.0;
+      alignSettings.scaleY = 1.0;
+      clearFitPreview();
+      cleanupState.initialized = false;
+      const _cwCanvases = ['cleanup-candidate-canvas', 'cleanup-source-canvas', 'cleanup-proposal-canvas'];
+      for (const id of _cwCanvases) {
+        const c = document.getElementById(id);
+        if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
+      }
+      document.getElementById('btn-ingest-submit')?.setAttribute('disabled', 'true');
+      const _txtName = document.getElementById('txt-ingest-name');
+      if (_txtName) _txtName.value = '';
+      const _dropText = document.getElementById('asset-drop-text');
+      if (_dropText) _dropText.innerHTML = 'Drag & drop PNG/JPG here or <span class="browse-link">browse</span>';
+      scheduleImportPreview();
+
       window.dispatchEvent(new CustomEvent('paperdoll:psd-loaded', { detail: { filename: file.name } }));
 
       psdProgressFill.style.width = '100%';
