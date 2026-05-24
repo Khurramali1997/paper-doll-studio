@@ -1,6 +1,6 @@
 import { DOLL_CONFIG } from './state.js';
 import { dilateMask, erodeMask, featherMask, keepLargestConnectedComponent } from './cleanup.js';
-import { generateBodySilhouetteCanvas, generateBodyCompositeCanvas } from './export.js';
+import { generateBodySilhouetteCanvas, generateBodyCompositeCanvas, generateSkinCompositeCanvas } from './export.js';
 import { canvasToBlob, downloadBlob, getBoundingBox, loadImage } from './utils.js';
 import { receiveAssetForCleanup } from './import.js';
 
@@ -992,12 +992,14 @@ async function buildTailorAsset() {
     let hasBody = false;
     for (let i = 3; i < silData.length; i += 4) { if (silData[i] > 10) { hasBody = true; break; } }
     if (hasBody) {
-      const [silBlob, compBlob] = await Promise.all([
+      const [silBlob, compBlob, skinBlob] = await Promise.all([
         new Promise(resolve => silCanvas.toBlob(resolve, 'image/png')),
         generateBodyCompositeCanvas().then(c => new Promise(resolve => c.toBlob(resolve, 'image/png'))),
+        generateSkinCompositeCanvas().then(c => new Promise(resolve => c.toBlob(resolve, 'image/png'))),
       ]);
       if (silBlob) fd.append('body_silhouette', silBlob, 'body_silhouette.png');
       if (compBlob) fd.append('body_composite', compBlob, 'body_composite.png');
+      if (skinBlob) fd.append('skin_composite', skinBlob, 'skin_composite.png');
     }
   } catch { /* no PSD loaded — server falls back to static mask */ }
 

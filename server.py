@@ -473,6 +473,7 @@ async def construct_pattern_endpoint(
     texture: Optional[UploadFile] = File(None),
     body_silhouette: Optional[UploadFile] = File(None),
     body_composite: Optional[UploadFile] = File(None),
+    skin_composite: Optional[UploadFile] = File(None),
     expand_x: int = Form(0),
     expand_y: int = Form(0),
     dilate_px: int = Form(0),
@@ -529,6 +530,20 @@ async def construct_pattern_endpoint(
         except Exception as e:
             print(f"derive_anchors: DWPose failed, falling back to rig.json: {e}")
 
+    # Extract cel-shading style schema from skin composite (naked skeleton layers).
+    style_schema = None
+    if skin_composite and skin_composite.filename:
+        try:
+            from compiler.style_schema import extract_style_schema
+            raw = await skin_composite.read()
+            arr = np.frombuffer(raw, np.uint8)
+            decoded = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+            if decoded is not None:
+                style_schema = extract_style_schema(decoded)
+                print(f"style_schema: extracted {len(style_schema)} keys")
+        except Exception as e:
+            print(f"style_schema: extraction failed: {e}")
+
     rig_anchors = None
     rig_path = os.path.join(BASE_RIG_DIR, "rig.json")
     if os.path.exists(rig_path):
@@ -562,6 +577,7 @@ async def construct_pattern_endpoint(
             rig_anchors=rig_anchors, semantic=semantic,
             body_silhouette_arr=body_silhouette_arr,
             derived_anchors=derived_anchors,
+            style_schema=style_schema,
         )
     except Exception as e:
         raise HTTPException(500, f"Pattern construction failed: {e}")

@@ -882,6 +882,7 @@ def construct_pattern(
     semantic: Optional[Dict] = None,
     body_silhouette_arr: Optional[np.ndarray] = None,
     derived_anchors: Optional[Dict] = None,
+    style_schema: Optional[Dict] = None,
 ) -> Dict:
     """Full pipeline: recipe → rendered BGRA asset.
 
@@ -896,6 +897,7 @@ def construct_pattern(
     rig_anchors  : optional override for rig anchor positions
     semantic     : optional pre-computed semantic_layer.annotate() result to reuse
     derived_anchors : live-derived anchors (e.g. from DWPose) that override rig.json
+    style_schema    : cel-shading schema from extract_style_schema() — replaces flat fill
 
     Returns
     -------
@@ -921,16 +923,22 @@ def construct_pattern(
     if not mask.any():
         warnings.append("Mask is empty after operations — check recipe and base_rig_dir.")
 
-    mat_type    = material.get("type", "solid")
-    color       = material.get("color", "#ffffff")
-    texture_arr = material.get("texture_arr")
+    color = material.get("color", "#ffffff")
 
-    if mat_type == "texture" and texture_arr is not None:
-        rgba = fill_texture(mask, texture_arr)
-        ops.append("fill:texture")
+    if style_schema:
+        from compiler.style_schema import apply_style_schema
+        rgba = apply_style_schema(mask, style_schema, color)
+        ops.append(f"fill:style_schema({color})")
     else:
-        rgba = fill_solid(mask, color)
-        ops.append(f"fill:solid({color})")
+        mat_type    = material.get("type", "solid")
+        texture_arr = material.get("texture_arr")
+
+        if mat_type == "texture" and texture_arr is not None:
+            rgba = fill_texture(mask, texture_arr)
+            ops.append("fill:texture")
+        else:
+            rgba = fill_solid(mask, color)
+            ops.append(f"fill:solid({color})")
 
     if effects.get("inner_shadow", False):
         rgba = apply_inner_shadow(rgba, mask)

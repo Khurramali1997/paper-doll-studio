@@ -88,6 +88,30 @@ export async function generateBodyCompositeCanvas() {
   return canvas;
 }
 
+export async function generateSkinCompositeCanvas() {
+  const docW = DOLL_CONFIG.canvas.width;
+  const docH = DOLL_CONFIG.canvas.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = docW;
+  canvas.height = docH;
+  const ctx = canvas.getContext('2d');
+
+  // Composite only skin_wear layers (the naked skeleton) — the ground truth
+  // for cel-shading reference. These are wardrobe layers with skin_wear option.
+  for (const layer of DOLL_CONFIG.layers) {
+    if (layer.optionValue !== 'skin_wear') continue;
+    const src = localImageCache[layer.file];
+    if (!src) continue;
+    try {
+      const img = await loadImage(src);
+      ctx.drawImage(img, 0, 0, docW, docH);
+    } catch (err) {
+      console.warn(`skin composite: could not load ${layer.file}:`, err);
+    }
+  }
+  return canvas;
+}
+
 export async function downloadReferencePack() {
   const silCanvas = await generateBodySilhouetteCanvas();
   const bodyCanvas = await generateBodyCompositeCanvas();
