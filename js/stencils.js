@@ -388,6 +388,10 @@ function syncSourceSelect() {
   const select = el('select-stencil-source');
   if (!select) return;
   select.textContent = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '— pick a source —';
+  select.appendChild(placeholder);
   for (const [value, label] of MASKS) {
     const option = document.createElement('option');
     option.value = value;
@@ -647,7 +651,8 @@ function invertSelected() {
 }
 
 async function duplicateSource() {
-  const sourceName = el('select-stencil-source')?.value || 'body_silhouette';
+  const sourceName = el('select-stencil-source')?.value;
+  if (!sourceName) { setStatus('Pick a source mask first.', true); return; }
   try {
     const canvas = await loadMaskCanvas(sourceName);
     const stencil = {
@@ -676,7 +681,8 @@ async function exportCanvas(canvas, fallbackName) {
 }
 
 async function exportSource() {
-  const sourceName = el('select-stencil-source')?.value || 'body_silhouette';
+  const sourceName = el('select-stencil-source')?.value;
+  if (!sourceName) { setStatus('Pick a source mask first.', true); return; }
   const canvas = await loadMaskCanvas(sourceName);
   await exportCanvas(canvas, `${sourceName}.png`);
 }
@@ -709,7 +715,7 @@ async function fetchReferenceChannels() {
 }
 
 async function buildGeometryVariants() {
-  const sourceName = el('select-stencil-source')?.value || 'body_silhouette';
+  const sourceName = el('select-stencil-source')?.value;
   if (sourceName === 'character_composite') {
     try {
       editor.sourceCanvas = await loadMaskCanvas(sourceName);
@@ -817,6 +823,7 @@ function deleteSelected() {
 
 function bindEvents() {
   el('select-stencil-source')?.addEventListener('change', async event => {
+    if (!event.target.value) { editor.sourceCanvas = null; drawEditor(); return; }
     try {
       editor.sourceCanvas = await loadMaskCanvas(event.target.value);
       drawEditor();
@@ -1230,11 +1237,6 @@ export async function initStencils() {
   await loadStoredStencils();
   syncUserSelect();
   bindEvents();
-  try {
-    editor.sourceCanvas = await loadMaskCanvas(el('select-stencil-source')?.value || 'body_silhouette');
-  } catch (err) {
-    setStatus(`Stencil source unavailable: ${err.message || err}`, true);
-  }
   setTool(editor.tool);
   if (el('val-stencil-brush')) el('val-stencil-brush').textContent = String(editor.brush);
   if (el('val-stencil-depth-cutoff')) el('val-stencil-depth-cutoff').textContent = el('range-stencil-depth-cutoff')?.value || '58';
