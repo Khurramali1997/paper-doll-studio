@@ -598,21 +598,21 @@ def _build_garment_envelope(
         ar_x, ar_y = _pt(ra, "ankle_right", (int(W * 0.609), int(H * 0.859)))
 
         cx = (wl_x + wr_x) // 2
-        crotch_y = hl_y + 5
+        crotch_x, crotch_y = _pt(ga, "crotch", (cx, hl_y + 5))
 
         left_pts = np.array([
             [wl_x,      wl_y],  [cx,         wl_y],
-            [cx,         crotch_y], [hl_x,   hl_y],
+            [crotch_x,   crotch_y], [hl_x,   hl_y],
             [kl_x,      kl_y],  [al_x,       al_y],
             [al_x + 22, al_y],  [kl_x + 22,  kl_y],
-            [hl_x + 22, hl_y],  [cx,         crotch_y],
+            [hl_x + 22, hl_y],  [crotch_x,   crotch_y],
         ], dtype=np.int32)
         right_pts = np.array([
             [cx,         wl_y],   [wr_x,     wl_y],
             [hr_x - 22, hr_y],   [kr_x - 22, kr_y],
             [ar_x - 22, ar_y],   [ar_x,      ar_y],
             [kr_x,      kr_y],   [hr_x,      hr_y],
-            [cx,         crotch_y],
+            [crotch_x,   crotch_y],
         ], dtype=np.int32)
         cv2.fillPoly(mask, [left_pts],  255)
         cv2.fillPoly(mask, [right_pts], 255)
@@ -783,7 +783,7 @@ def build_mask_from_recipe(
             bottom_y = _pt(ga, "hem_left", (int(W * 0.365), int(H * 0.807)))[1] + 20
 
         elif category in ("legwear", "pants"):
-            top_y    = _pt(ga, "waist_left", (int(W * 0.414), int(H * 0.547)))[1] - 10
+            top_y    = _pt(ga, "navel", (W // 2, int(H * 0.558)))[1] - 5
             bottom_y = _pt(ra, "ankle_left", (int(W * 0.390), int(H * 0.859)))[1] + 20
 
         elif category == "handwear":

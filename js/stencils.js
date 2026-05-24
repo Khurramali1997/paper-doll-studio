@@ -3,6 +3,7 @@ import { dilateMask, erodeMask, featherMask, keepLargestConnectedComponent } fro
 import { generateBodySilhouetteCanvas, generateBodyCompositeCanvas, generateSkinCompositeCanvas } from './export.js';
 import { canvasToBlob, downloadBlob, getBoundingBox, loadImage } from './utils.js';
 import { receiveAssetForCleanup } from './import.js';
+import { localImageCache } from './render.js';
 
 const STORAGE_KEY = 'paperdoll_user_stencils_v1';
 const IDB_NAME    = 'paperdoll_stencils';
@@ -956,6 +957,294 @@ function initTailorSliderLabels() {
   }
 }
 
+// ── Digital Tailor Interactive Anchor Overlay ──
+
+let tailorAnchors = null;
+let tailorAnchorEnabled = false;
+let tailorAnchorDragTarget = null;
+let tailorAnchorDragOffset = null;
+
+const TAILOR_ANCHOR_COLORS = {
+  neck: '#ff0000',
+  left_shoulder: '#00ff00', right_shoulder: '#00ff00',
+  strap_left: '#aaff00', strap_right: '#aaff00',
+  armpit_left: '#ff9900', armpit_right: '#ff9900',
+  bust_left: '#ff66cc', bust_right: '#ff66cc',
+  waist_left: '#ffff00', waist_right: '#ffff00',
+  navel: '#ff00ff',
+  hip_left: '#ff00ff', hip_right: '#ff00ff',
+  crotch: '#ffffff',
+  knee_left: '#ff8800', knee_right: '#ff8800',
+  ankle_left: '#00ffff', ankle_right: '#00ffff',
+  elbow_left: '#8888ff', elbow_right: '#8888ff',
+  wrist_left: '#66ddff', wrist_right: '#66ddff',
+  hem_left: '#00cccc', hem_right: '#00cccc',
+};
+
+const TAILOR_ANCHOR_DEFAULTS = {
+  neck: [384, 180],
+  left_shoulder: [304, 250], right_shoulder: [472, 250],
+  strap_left: [345, 210], strap_right: [423, 210],
+  armpit_left: [302, 285], armpit_right: [466, 285],
+  bust_left: [320, 310], bust_right: [448, 310],
+  waist_left: [318, 420], waist_right: [446, 420],
+  navel: [384, 428],
+  hip_left: [300, 440], hip_right: [468, 440],
+  crotch: [382, 485],
+  knee_left: [296, 540], knee_right: [472, 540],
+  ankle_left: [300, 660], ankle_right: [468, 660],
+  elbow_left: [288, 380], elbow_right: [480, 380],
+  wrist_left: [282, 510], wrist_right: [486, 510],
+  hem_left: [280, 620], hem_right: [488, 620],
+};
+
+// Per-recipe required anchor sets (subset of all anchors)
+const TAILOR_RECIPE_ANCHORS = {
+  bodice: ['neck', 'armpit_left', 'armpit_right', 'waist_left', 'waist_right'],
+  tight_top: ['neck', 'armpit_left', 'armpit_right', 'waist_left', 'waist_right'],
+  tight_dress: ['neck', 'strap_left', 'strap_right', 'bust_left', 'bust_right',
+                'waist_left', 'waist_right', 'hip_left', 'hip_right', 'hem_left', 'hem_right'],
+  leggings: ['navel', 'waist_left', 'waist_right', 'crotch', 'hip_left', 'hip_right',
+             'knee_left', 'knee_right', 'ankle_left', 'ankle_right'],
+  stockings: ['waist_left', 'waist_right', 'hip_left', 'hip_right',
+              'knee_left', 'knee_right', 'ankle_left', 'ankle_right'],
+  gloves: ['left_shoulder', 'right_shoulder', 'elbow_left', 'elbow_right',
+           'wrist_left', 'wrist_right'],
+  bodycon_dress: ['neck', 'strap_left', 'strap_right', 'bust_left', 'bust_right',
+                  'waist_left', 'waist_right', 'hip_left', 'hip_right', 'hem_left', 'hem_right'],
+  simple_flared_dress: ['neck', 'strap_left', 'strap_right', 'bust_left', 'bust_right',
+                        'waist_left', 'waist_right', 'hip_left', 'hip_right', 'hem_left', 'hem_right'],
+};
+
+function _getRecipeAnchors() {
+  const recipe = document.getElementById('select-tailor-recipe')?.value || 'bodice';
+  const names = TAILOR_RECIPE_ANCHORS[recipe] || TAILOR_RECIPE_ANCHORS.bodice;
+  const result = {};
+  for (const name of names) {
+    const fromLayer = tailorAnchors?.[name];
+    result[name] = fromLayer || [...(TAILOR_ANCHOR_DEFAULTS[name] || [0, 0])];
+  }
+  return result;
+}
+
+function _drawTailorAnchors(anchors) {
+  const canvas = document.getElementById('anchor-overlay-canvas');
+  if (!canvas) return;
+  canvas.style.display = 'block';
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (const [name, [x, y]] of Object.entries(anchors)) {
+    const color = TAILOR_ANCHOR_COLORS[name] || '#ffffff';
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px monospace';
+    ctx.fillText(name, x + 8, y + 4);
+  }
+
+  canvas.style.pointerEvents = tailorAnchorEnabled ? 'auto' : 'none';
+  canvas.onmousedown = null;
+  canvas.onmousemove = null;
+  canvas.onmouseup = null;
+  canvas.onmouseleave = null;
+
+  if (tailorAnchorEnabled) {
+    const names = Object.keys(anchors);
+    let hitIdx = -1;
+
+    canvas.onmousedown = e => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const mx = (e.clientX - rect.left) * scaleX;
+      const my = (e.clientY - rect.top) * scaleY;
+      hitIdx = -1;
+      for (let i = 0; i < names.length; i++) {
+        const [ax, ay] = anchors[names[i]];
+        if (Math.abs(mx - ax) < 10 && Math.abs(my - ay) < 10) {
+          hitIdx = i;
+          tailorAnchorDragTarget = names[i];
+          tailorAnchorDragOffset = [mx - ax, my - ay];
+          canvas.style.cursor = 'grabbing';
+          break;
+        }
+      }
+    };
+
+    canvas.onmousemove = e => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const mx = (e.clientX - rect.left) * scaleX;
+      const my = (e.clientY - rect.top) * scaleY;
+
+      if (tailorAnchorDragTarget) {
+        anchors[tailorAnchorDragTarget] = [
+          Math.round(mx - (tailorAnchorDragOffset?.[0] || 0)),
+          Math.round(my - (tailorAnchorDragOffset?.[1] || 0)),
+        ];
+        _drawTailorAnchors(anchors);
+        return;
+      }
+
+      // Hover highlight
+      let hover = false;
+      for (const [name, [ax, ay]] of Object.entries(anchors)) {
+        if (Math.abs(mx - ax) < 10 && Math.abs(my - ay) < 10) {
+          canvas.style.cursor = 'grab';
+          hover = true;
+          break;
+        }
+      }
+      if (!hover) canvas.style.cursor = 'default';
+    };
+
+    canvas.onmouseup = () => {
+      if (tailorAnchorDragTarget) {
+        tailorAnchors = { ...anchors };
+        _updateTailorAnchorUI();
+      }
+      tailorAnchorDragTarget = null;
+      tailorAnchorDragOffset = null;
+      canvas.style.cursor = 'default';
+    };
+
+    canvas.onmouseleave = () => {
+      tailorAnchorDragTarget = null;
+      tailorAnchorDragOffset = null;
+    };
+  }
+}
+
+function _updateTailorAnchorUI() {
+  const countEl = document.getElementById('tailor-anchor-count');
+  if (countEl) countEl.textContent = tailorAnchors ? `${Object.keys(tailorAnchors).length} anchors` : '0 anchors';
+}
+
+function initTailorAnchors() {
+  // Try PSD _anchor_* layers first, fall back to defaults
+  const fromLayers = extractAnchorPoints();
+  tailorAnchors = fromLayers || {};
+  _updateTailorAnchorUI();
+
+  // Wire toggle button
+  const toggle = document.getElementById('btn-tailor-anchor-toggle');
+  if (toggle) {
+    toggle.onclick = () => {
+      tailorAnchorEnabled = !tailorAnchorEnabled;
+      toggle.textContent = tailorAnchorEnabled ? '🔒 Anchors: ON' : '🔓 Anchors: OFF';
+      if (tailorAnchorEnabled) {
+        _showTailorOverlay();
+      } else {
+        _hideTailorOverlay();
+      }
+    };
+  }
+
+  // Wire reset button
+  const reset = document.getElementById('btn-tailor-anchor-reset');
+  if (reset) {
+    reset.onclick = () => {
+      tailorAnchors = {};
+      tailorAnchorEnabled = false;
+      toggle.textContent = '🔓 Anchors: OFF';
+      _hideTailorOverlay();
+      _updateTailorAnchorUI();
+      const fromLayers2 = extractAnchorPoints();
+      if (Object.keys(fromLayers2).length > 0) {
+        tailorAnchors = fromLayers2;
+        _updateTailorAnchorUI();
+      }
+    };
+  }
+}
+
+function _showTailorOverlay() {
+  const anchors = _getRecipeAnchors();
+  _drawTailorAnchors(anchors);
+
+  // Dim body with semi-transparent overlay info
+  const statusEl = document.getElementById('tailor-status');
+  if (statusEl) {
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = 'Drag colored dots to adjust anchor positions on the character.';
+    statusEl.style.background = 'rgba(0,0,0,0.6)';
+    statusEl.style.color = '#fff';
+  }
+}
+
+function _hideTailorOverlay() {
+  const canvas = document.getElementById('anchor-overlay-canvas');
+  if (canvas) {
+    canvas.style.display = 'none';
+    canvas.style.pointerEvents = 'none';
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.onmousedown = null;
+    canvas.onmousemove = null;
+    canvas.onmouseup = null;
+    canvas.onmouseleave = null;
+  }
+  const statusEl = document.getElementById('tailor-status');
+  if (statusEl) statusEl.style.display = 'none';
+}
+
+function getTailorAnchors() {
+  return tailorAnchors && Object.keys(tailorAnchors).length > 0 ? tailorAnchors : null;
+}
+
+function extractAnchorPoints() {
+  if (!DOLL_CONFIG || !DOLL_CONFIG.layers) return {};
+  const ANCHOR_MAP = {
+    '_anchor_neck': 'neck',
+    '_anchor_shoulder_L': 'left_shoulder', '_anchor_shoulder_R': 'right_shoulder',
+    '_anchor_strap_L': 'strap_left',       '_anchor_strap_R': 'strap_right',
+    '_anchor_armpit_L': 'armpit_left',     '_anchor_armpit_R': 'armpit_right',
+    '_anchor_bust_L': 'bust_left',         '_anchor_bust_R': 'bust_right',
+    '_anchor_waist_L': 'waist_left',       '_anchor_waist_R': 'waist_right',
+    '_anchor_navel': 'navel',
+    '_anchor_hip_L': 'hip_left',           '_anchor_hip_R': 'hip_right',
+    '_anchor_crotch': 'crotch',
+    '_anchor_knee_L': 'knee_left',         '_anchor_knee_R': 'knee_right',
+    '_anchor_ankle_L': 'ankle_left',       '_anchor_ankle_R': 'ankle_right',
+    '_anchor_elbow_L': 'elbow_left',       '_anchor_elbow_R': 'elbow_right',
+    '_anchor_wrist_L': 'wrist_left',       '_anchor_wrist_R': 'wrist_right',
+    '_anchor_hem_L': 'hem_left',           '_anchor_hem_R': 'hem_right',
+  };
+  const results = {};
+  const docW = DOLL_CONFIG.canvas.width;
+  const docH = DOLL_CONFIG.canvas.height;
+  for (const layer of DOLL_CONFIG.layers) {
+    const anchorName = ANCHOR_MAP[layer.name];
+    if (!anchorName) continue;
+    const src = localImageCache[layer.file];
+    if (!src) continue;
+    const c = document.createElement('canvas');
+    c.width = docW; c.height = docH;
+    const ctx = c.getContext('2d');
+    if (!ctx) continue;
+    const img = new Image();
+    img.src = src;
+    ctx.drawImage(img, 0, 0, docW, docH);
+    const data = ctx.getImageData(0, 0, docW, docH).data;
+    let sumX = 0, sumY = 0, count = 0;
+    for (let y = 0; y < docH; y++) {
+      for (let x = 0; x < docW; x++) {
+        const i = (y * docW + x) * 4;
+        if (data[i + 3] > 10) { sumX += x; sumY += y; count++; }
+      }
+    }
+    if (count > 0) results[anchorName] = [Math.round(sumX / count), Math.round(sumY / count)];
+  }
+  return results;
+}
+
 async function buildTailorAsset() {
   const statusEl = el('tailor-status');
   const resultEl = el('tailor-result');
@@ -1000,6 +1289,13 @@ async function buildTailorAsset() {
       if (silBlob) fd.append('body_silhouette', silBlob, 'body_silhouette.png');
       if (compBlob) fd.append('body_composite', compBlob, 'body_composite.png');
       if (skinBlob) fd.append('skin_composite', skinBlob, 'skin_composite.png');
+    }
+
+    // Anchor points: user-adjusted > PSD _anchor_* layers > none
+    const userAnchors = getTailorAnchors();
+    const anchors = userAnchors || extractAnchorPoints();
+    if (Object.keys(anchors).length > 0) {
+      fd.append('anchors_json', JSON.stringify(anchors));
     }
   } catch { /* no PSD loaded — server falls back to static mask */ }
 
@@ -1261,6 +1557,7 @@ export async function initStencils() {
   syncFabricStencilSelects();
   loadFabricWardrobeSelect();
   initTailorSliderLabels();
+  initTailorAnchors();
   drawEditor();
   renderGallery();
 
@@ -1272,5 +1569,8 @@ export async function initStencils() {
         drawEditor();
       } catch {}
     }
+    // Re-init anchors from new PSD layers
+    tailorAnchors = extractAnchorPoints();
+    _updateTailorAnchorUI();
   });
 }

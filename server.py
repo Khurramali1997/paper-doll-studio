@@ -485,6 +485,7 @@ async def construct_pattern_endpoint(
     inner_shadow: str = Form("true"),
     highlight: str = Form("false"),
     semantic_json: str = Form(""),  # optional: pre-computed semantic_layer result
+    anchors_json: str = Form(""),  # optional: explicit anchor points from PSD _anchor_* layers
 ):
     from compiler.pattern_constructor import construct_pattern, RECIPES
     if recipe not in RECIPES:
@@ -512,9 +513,17 @@ async def construct_pattern_endpoint(
     if body_silhouette_arr is None:
         raise HTTPException(400, "No PSD loaded — load a character before using the Digital Tailor")
 
-    # Derive anchors from PSD body (DWPose) when we have both composite + silhouette.
+    # Derive anchors — priority: explicit markers from PSD > DWPose inference.
     derived_anchors = None
-    if body_silhouette_arr is not None and body_composite and body_composite.filename:
+    if anchors_json.strip():
+        try:
+            parsed = json.loads(anchors_json)
+            if isinstance(parsed, dict) and len(parsed) > 0:
+                derived_anchors = {k: (int(v[0]), int(v[1])) for k, v in parsed.items()}
+                print(f"derive_anchors: {len(derived_anchors)} from PSD _anchor_* layers")
+        except Exception as e:
+            print(f"derive_anchors: failed to parse anchors_json: {e}")
+    if derived_anchors is None and body_silhouette_arr is not None and body_composite and body_composite.filename:
         try:
             from compiler.dwpose_estimator import estimate_pose
             raw = await body_composite.read()

@@ -191,6 +191,10 @@ def estimate_pose(
 
     ls = _kp(KP_LEFT_SHOULDER)
     rs = _kp(KP_RIGHT_SHOULDER)
+    le = _kp(KP_LEFT_ELBOW)
+    re = _kp(KP_RIGHT_ELBOW)
+    lw = _kp(KP_LEFT_WRIST)
+    rw = _kp(KP_RIGHT_WRIST)
     lh = _kp(KP_LEFT_HIP)
     rh = _kp(KP_RIGHT_HIP)
     la = _kp(KP_LEFT_ANKLE)
@@ -202,23 +206,89 @@ def estimate_pose(
         neck = ((ls[0] + rs[0]) // 2, (ls[1] + rs[1]) // 2)
 
     # Synthesize waist from hip midpoint (waist is above hips)
-    waist = None
+    waist_left = None
+    waist_right = None
     if lh is not None and rh is not None:
-        waist_x = (lh[0] + rh[0]) // 2
         waist_y = (lh[1] + rh[1]) // 2 - int((rh[1] - lh[1]) * 0.3)
-        waist = (waist_x, waist_y)
+        # Derive left/right waist from body silhouette edges at waist Y
+        if 0 <= waist_y < body_mask.shape[0]:
+            waist_row = body_mask[waist_y, :]
+            waist_cols = np.where(waist_row > 0)[0]
+            if len(waist_cols) > 1:
+                waist_left  = (int(waist_cols[0]), waist_y)
+                waist_right = (int(waist_cols[-1]), waist_y)
+        # Fallback: center point if silhouette scan fails
+        if waist_left is None:
+            waist_x = (lh[0] + rh[0]) // 2
+            waist_left = (waist_x, waist_y)
+
+    # Synthesize armpit from silhouette at Y between shoulder and chest
+    def _synthesize_armpit(side_y):
+        if 0 <= side_y < body_mask.shape[0]:
+            row = body_mask[side_y, :]
+            cols = np.where(row > 0)[0]
+            if len(cols) > 1:
+                return (int(cols[0]), side_y), (int(cols[-1]), side_y)
+        return None, None
+
+    armpit_left = armpit_right = None
+    if ls is not None:
+        armpit_y = ls[1] + int((lh[1] - ls[1]) * 0.15) if lh is not None else ls[1] + 30
+        armpit_left, armpit_right = _synthesize_armpit(armpit_y)
+
+    # Synthesize navel from silhouette between waist and hip
+    navel_pt = None
+    if waist_left is not None and lh is not None:
+        navel_y = (waist_left[1] + lh[1]) // 2
+        if 0 <= navel_y < body_mask.shape[0]:
+            row = body_mask[navel_y, :]
+            cols = np.where(row > 0)[0]
+            if len(cols) > 1:
+                navel_pt = ((int(cols[0]) + int(cols[-1])) // 2, navel_y)
+
+    # Synthesize crotch from silhouette: find Y where body mask splits into legs
+    crotch_pt = None
+    if lh is not None and la is not None:
+        hip_y = max(lh[1], rh[1]) if rh is not None else lh[1]
+        knee_y = min(la[1], ra[1]) if ra is not None else la[1]
+        for y in range(hip_y + 5, min(knee_y, body_mask.shape[0] - 1)):
+            row = body_mask[y, :]
+            cols = np.where(row > 0)[0]
+            if len(cols) < 6:  # waist-width drops sharply at leg split
+                crotch_pt = (int(cols.mean()) if len(cols) > 0 else int(body_mask.shape[1] // 2), y)
+                break
 
     result = {}
     if ls is not None:
         result["strap_left"] = ls
+    if rs is not None:
+        result["strap_right"] = rs
     if neck is not None:
         result["neck"] = neck
-    if waist is not None:
-        result["waist_left"] = waist
+    if armpit_left is not None:
+        result["armpit_left"] = armpit_left
+    if armpit_right is not None:
+        result["armpit_right"] = armpit_right
+    if waist_left is not None:
+        result["waist_left"] = waist_left
+    if waist_right is not None:
+        result["waist_right"] = waist_right
+    if navel_pt is not None:
+        result["navel"] = navel_pt
+    if crotch_pt is not None:
+        result["crotch"] = crotch_pt
     if lh is not None:
         result["hip_left"] = lh
     if rh is not None:
         result["hip_right"] = rh
+    if le is not None:
+        result["elbow_left"] = le
+    if re is not None:
+        result["elbow_right"] = re
+    if lw is not None:
+        result["wrist_left"] = lw
+    if rw is not None:
+        result["wrist_right"] = rw
     if la is not None:
         result["ankle_left"] = la
     if ra is not None:

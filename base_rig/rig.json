@@ -73,6 +73,38 @@
     "hem_right": [
       488,
       620
+    ],
+    "armpit_left": [
+      302,
+      285
+    ],
+    "armpit_right": [
+      466,
+      285
+    ],
+    "navel": [
+      384,
+      428
+    ],
+    "crotch": [
+      382,
+      485
+    ],
+    "elbow_left": [
+      288,
+      380
+    ],
+    "elbow_right": [
+      480,
+      380
+    ],
+    "wrist_left": [
+      282,
+      510
+    ],
+    "wrist_right": [
+      486,
+      510
     ]
   },
   "garment_anchors": {
@@ -120,6 +152,34 @@
       "hem_right": [
         488,
         620
+      ],
+      "armpit_left": [
+        302,
+        285
+      ],
+      "armpit_right": [
+        466,
+        285
+      ],
+      "navel": [
+        384,
+        428
+      ],
+      "elbow_left": [
+        288,
+        380
+      ],
+      "elbow_right": [
+        480,
+        380
+      ],
+      "wrist_left": [
+        282,
+        510
+      ],
+      "wrist_right": [
+        486,
+        510
       ]
     },
     "topwear": {
@@ -142,6 +202,34 @@
       "waist_right": [
         446,
         420
+      ],
+      "armpit_left": [
+        302,
+        285
+      ],
+      "armpit_right": [
+        466,
+        285
+      ],
+      "navel": [
+        384,
+        428
+      ],
+      "elbow_left": [
+        288,
+        380
+      ],
+      "elbow_right": [
+        480,
+        380
+      ],
+      "wrist_left": [
+        282,
+        510
+      ],
+      "wrist_right": [
+        486,
+        510
       ]
     },
     "top": {
@@ -164,6 +252,34 @@
       "waist_right": [
         446,
         420
+      ],
+      "armpit_left": [
+        302,
+        285
+      ],
+      "armpit_right": [
+        466,
+        285
+      ],
+      "navel": [
+        384,
+        428
+      ],
+      "elbow_left": [
+        288,
+        380
+      ],
+      "elbow_right": [
+        480,
+        380
+      ],
+      "wrist_left": [
+        282,
+        510
+      ],
+      "wrist_right": [
+        486,
+        510
       ]
     },
     "skirt": {
@@ -190,6 +306,10 @@
       "hem_right": [
         488,
         620
+      ],
+      "navel": [
+        384,
+        428
       ]
     },
     "pants": {
@@ -216,6 +336,14 @@
       "knee_right": [
         472,
         540
+      ],
+      "navel": [
+        384,
+        428
+      ],
+      "crotch": [
+        382,
+        485
       ]
     },
     "legwear": {
@@ -242,6 +370,14 @@
       "knee_right": [
         472,
         540
+      ],
+      "navel": [
+        384,
+        428
+      ],
+      "crotch": [
+        382,
+        485
       ]
     },
     "outerwear": {
@@ -280,6 +416,34 @@
       "hem_right": [
         488,
         620
+      ],
+      "armpit_left": [
+        302,
+        285
+      ],
+      "armpit_right": [
+        466,
+        285
+      ],
+      "navel": [
+        384,
+        428
+      ],
+      "elbow_left": [
+        288,
+        380
+      ],
+      "elbow_right": [
+        480,
+        380
+      ],
+      "wrist_left": [
+        282,
+        510
+      ],
+      "wrist_right": [
+        486,
+        510
       ]
     }
   }
