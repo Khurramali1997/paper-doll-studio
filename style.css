@@ -849,6 +849,26 @@ select:focus {
   border-radius: 5px;
 }
 
+.cleanup-control-grid select {
+  width: 100%;
+  min-height: 1.85rem;
+  padding: 0.25rem 0.35rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-family: var(--font-main);
+  font-size: 0.68rem;
+}
+
+.lane-c-assist-panel {
+  margin-top: 0.55rem;
+  padding: 0.55rem;
+  border: 1px dashed rgba(46, 213, 115, 0.25);
+  border-radius: 6px;
+  background: rgba(46, 213, 115, 0.045);
+}
+
 .cleanup-brush-row {
   display: grid;
   grid-template-columns: auto auto auto 1fr;

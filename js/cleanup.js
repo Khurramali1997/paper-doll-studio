@@ -122,6 +122,44 @@ export function removeSmallIslands(imageData, minArea = 32, minAlpha = 10) {
   return out;
 }
 
+export function applyMaskProposal(currentImageData, proposalImageData, sourceImageData, mode = 'replace') {
+  const out = cloneImageData(currentImageData);
+  const len = Math.min(out.data.length, proposalImageData.data.length, sourceImageData.data.length);
+  for (let i = 0; i < len; i += 4) {
+    const currentAlpha = currentImageData.data[i + 3];
+    const proposalAlpha = proposalImageData.data[i + 3];
+    let nextAlpha = proposalAlpha;
+    if (mode === 'union') nextAlpha = Math.max(currentAlpha, proposalAlpha);
+    if (mode === 'intersect') nextAlpha = Math.min(currentAlpha, proposalAlpha);
+
+    if (nextAlpha > 0) {
+      const sourceVisible = sourceImageData.data[i + 3] > 0;
+      out.data[i] = sourceVisible ? sourceImageData.data[i] : proposalImageData.data[i];
+      out.data[i + 1] = sourceVisible ? sourceImageData.data[i + 1] : proposalImageData.data[i + 1];
+      out.data[i + 2] = sourceVisible ? sourceImageData.data[i + 2] : proposalImageData.data[i + 2];
+    }
+    out.data[i + 3] = nextAlpha;
+  }
+  return out;
+}
+
+export function buildCleanupMetadata({ sourceLane, operations = [], manualEdits = 0, mlAssist = null } = {}) {
+  const metadata = {
+    source_lane: sourceLane || 'transparent_png',
+    operations: [...operations],
+    manual_edits: manualEdits,
+  };
+  if (mlAssist) {
+    metadata.ml_assist = {
+      backend: mlAssist.backend || 'cv',
+      style_strength: mlAssist.style_strength,
+      apply_mode: mlAssist.apply_mode,
+      proposal_stats: mlAssist.proposal_stats || null,
+    };
+  }
+  return metadata;
+}
+
 export function getAlphaStats(imageData) {
   const { width, height, data } = imageData;
   let opaquePixels = 0;

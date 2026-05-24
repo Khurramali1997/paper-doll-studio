@@ -20,6 +20,8 @@ import {
   getAlphaStats as getCleanupAlphaStats,
   parseHexColor,
   countVisibleMaskOverlap,
+  applyMaskProposal,
+  buildCleanupMetadata,
 } from './cleanup.js';
 import { clearFitPreview } from './fit_preview.js';
 import { buildUI, updateActiveOptionButton } from './wardrobe.js';
@@ -37,6 +39,9 @@ const cleanupState = {
   undoStack: [],
   manualEdits: 0,
   operations: [],
+  mlAssist: null,
+  proposalImageData: null,
+  proposalStats: null,
   sourceLane: 'transparent_png',
   brushDown: false,
   brushTool: 'erase',
@@ -233,16 +238,17 @@ async function applyBodySubtractionToCanvas(canvas) {
 }
 
 function cleanupHasEdits() {
-  return cleanupState.operations.length > 0 || cleanupState.manualEdits > 0;
+  return cleanupState.operations.length > 0 || cleanupState.manualEdits > 0 || !!cleanupState.mlAssist;
 }
 
 function getCleanupMetadata() {
   if (!cleanupState.initialized) return null;
-  return {
-    source_lane: cleanupState.sourceLane,
+  return buildCleanupMetadata({
+    sourceLane: cleanupState.sourceLane,
     operations: [...cleanupState.operations],
-    manual_edits: cleanupState.manualEdits,
-  };
+    manualEdits: cleanupState.manualEdits,
+    mlAssist: cleanupState.mlAssist,
+  });
 }
 
 function canvasImageData(canvas) {
@@ -270,6 +276,15 @@ function cleanupControls() {
     bodySubtract: document.getElementById('chk-cleanup-body-subtract'),
     allowedOverlay: document.getElementById('chk-cleanup-allowed-overlay'),
     forbiddenOverlay: document.getElementById('chk-cleanup-forbidden-overlay'),
+    laneCAssist: document.getElementById('cleanup-lane-c-assist'),
+    laneCGenerate: document.getElementById('btn-cleanup-lane-c-generate'),
+    laneCApply: document.getElementById('btn-cleanup-lane-c-apply'),
+    laneCStyle: document.getElementById('range-cleanup-lane-c-style'),
+    laneCOverlay: document.getElementById('chk-cleanup-lane-c-overlay'),
+    laneCApplyMode: document.getElementById('select-cleanup-lane-c-apply-mode'),
+    laneCBgRemove: document.getElementById('chk-cleanup-lane-c-bg-remove'),
+    laneCStatus: document.getElementById('cleanup-lane-c-status'),
+    proposalCanvas: document.getElementById('cleanup-proposal-canvas'),
     brush: document.getElementById('range-cleanup-brush'),
     zoom: document.getElementById('range-cleanup-zoom'),
     zoomFit: document.getElementById('btn-cleanup-fit'),
@@ -287,11 +302,20 @@ function syncCleanupControlLabels() {
   const island = document.getElementById('val-cleanup-island-size');
   const brush = document.getElementById('val-cleanup-brush');
   const zoom = document.getElementById('val-cleanup-zoom');
+  const laneCStyle = document.getElementById('val-cleanup-lane-c-style');
   if (keyTol && c.keyTol) keyTol.textContent = c.keyTol.value;
   if (alpha && c.alpha) alpha.textContent = c.alpha.value;
   if (island && c.islandSize) island.textContent = c.islandSize.value;
   if (brush && c.brush) brush.textContent = c.brush.value;
   if (zoom && c.zoom) zoom.textContent = c.zoom.value;
+  if (laneCStyle && c.laneCStyle) laneCStyle.textContent = c.laneCStyle.value;
+}
+
+function syncLaneCAssistVisibility() {
+  const c = cleanupControls();
+  const isLaneC = (c.lane?.value || cleanupState.sourceLane) === 'clothed_guide';
+  if (c.laneCAssist) c.laneCAssist.style.display = isLaneC ? 'block' : 'none';
+  if (c.proposalCanvas) c.proposalCanvas.style.opacity = isLaneC ? '1' : '0.45';
 }
 
 function applyCleanupZoom() {
@@ -318,6 +342,7 @@ async function initCleanupWorkbenchForImage(image) {
   const details = document.getElementById('details-cleanup-workbench');
   const sourceCanvas = document.getElementById('cleanup-source-canvas');
   const candidateCanvas = document.getElementById('cleanup-candidate-canvas');
+  const proposalCanvas = document.getElementById('cleanup-proposal-canvas');
   if (!sourceCanvas || !candidateCanvas) return;
 
   const w = image.naturalWidth || image.width;
@@ -326,6 +351,11 @@ async function initCleanupWorkbenchForImage(image) {
   sourceCanvas.height = h;
   candidateCanvas.width = w;
   candidateCanvas.height = h;
+  if (proposalCanvas) {
+    proposalCanvas.width = w;
+    proposalCanvas.height = h;
+    proposalCanvas.getContext('2d').clearRect(0, 0, w, h);
+  }
   const sourceCtx = sourceCanvas.getContext('2d');
   sourceCtx.clearRect(0, 0, w, h);
   sourceCtx.drawImage(image, 0, 0, w, h);
@@ -339,11 +369,15 @@ async function initCleanupWorkbenchForImage(image) {
   cleanupState.undoStack = [];
   cleanupState.manualEdits = 0;
   cleanupState.operations = [];
+  cleanupState.mlAssist = null;
+  cleanupState.proposalImageData = null;
+  cleanupState.proposalStats = null;
   cleanupState.sourceLane = cleanupControls().lane?.value || 'transparent_png';
   cleanupState.activeMaskCache = {};
 
   if (details) details.open = true;
   putCanvasImageData(candidateCanvas, cleanupState.candidateImageData);
+  syncLaneCAssistVisibility();
   fitCleanupZoom();
   await applyCleanupFromControls({ preserveManual: false });
 }
@@ -358,6 +392,117 @@ async function setPendingAssetFromCleanup() {
   setPendingAsset(file, image);
   setPendingPreviewImage(null);
   scheduleImportPreview();
+}
+
+function drawLaneCProposalPreview() {
+  const c = cleanupControls();
+  if (!c.proposalCanvas) return;
+  const canvas = c.proposalCanvas;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!cleanupState.proposalImageData) return;
+
+  if (c.laneCOverlay?.checked && cleanupState.sourceImageData) {
+    ctx.putImageData(cleanupState.sourceImageData, 0, 0);
+    const overlay = document.createElement('canvas');
+    overlay.width = canvas.width;
+    overlay.height = canvas.height;
+    const octx = overlay.getContext('2d');
+    const data = new Uint8ClampedArray(cleanupState.proposalImageData.data.length);
+    for (let i = 0; i < data.length; i += 4) {
+      const a = cleanupState.proposalImageData.data[i + 3];
+      data[i] = 46;
+      data[i + 1] = 213;
+      data[i + 2] = 115;
+      data[i + 3] = a > 10 ? 132 : 0;
+    }
+    octx.putImageData(new ImageData(data, canvas.width, canvas.height), 0, 0);
+    ctx.drawImage(overlay, 0, 0);
+  } else {
+    ctx.putImageData(cleanupState.proposalImageData, 0, 0);
+  }
+}
+
+async function generateLaneCProposal() {
+  if (!cleanupState.sourceCanvas || !cleanupState.candidateCanvas) return;
+  const c = cleanupControls();
+  const status = c.laneCStatus;
+  if (status) {
+    status.style.display = 'block';
+    status.style.color = '';
+    status.textContent = 'Generating assisted mask...';
+  }
+
+  try {
+    const sourceBlob = await canvasToBlob(cleanupState.sourceCanvas);
+    const currentBlob = await canvasToBlob(cleanupState.candidateCanvas);
+    const fd = new FormData();
+    fd.append('image', new File([sourceBlob], pendingAssetFile?.name || 'lane_c_source.png', { type: 'image/png' }));
+    fd.append('category', document.getElementById('select-ingest-slot')?.value || '');
+    fd.append('style_strength', String(parseInt(c.laneCStyle?.value || '35', 10) / 100));
+    fd.append('use_bg_remove', c.laneCBgRemove?.checked ? 'true' : 'false');
+    fd.append('current_mask', new File([currentBlob], 'current_mask.png', { type: 'image/png' }));
+
+    const res = await fetch('/api/cleanup-assist/lane-c', { method: 'POST', body: fd });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch {}
+      throw new Error(`HTTP ${res.status}: ${detail}`);
+    }
+    const result = await res.json();
+    const image = await loadImage(`data:image/png;base64,${result.proposal_png}`);
+    const canvas = c.proposalCanvas || document.createElement('canvas');
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0);
+    cleanupState.proposalImageData = canvasImageData(canvas);
+    cleanupState.proposalStats = result.stats || null;
+    drawLaneCProposalPreview();
+    if (status) {
+      const coverage = Math.round((cleanupState.proposalStats?.coverage || 0) * 1000) / 10;
+      const edge = Math.round((cleanupState.proposalStats?.edge_preservation_score ?? 1) * 100);
+      status.textContent = `Proposal ready: ${coverage}% coverage, ${edge}% outline preservation.`;
+    }
+    await updateCleanupWarnings();
+  } catch (err) {
+    console.warn('Lane C cleanup assist failed:', err);
+    if (status) {
+      status.style.color = 'var(--danger-color)';
+      status.textContent = err.message || 'Cleanup assist failed.';
+    }
+  }
+}
+
+async function applyLaneCProposal() {
+  if (!cleanupState.proposalImageData || !cleanupState.candidateImageData || !cleanupState.sourceImageData) return;
+  const c = cleanupControls();
+  const mode = c.laneCApplyMode?.value || 'replace';
+  cleanupState.undoStack.push({
+    candidate: cloneCleanupImageData(cleanupState.candidateImageData),
+    manualMask: cleanupState.manualMaskImageData ? cloneCleanupImageData(cleanupState.manualMaskImageData) : null,
+  });
+  cleanupState.candidateImageData = applyMaskProposal(
+    cleanupState.candidateImageData,
+    cleanupState.proposalImageData,
+    cleanupState.sourceImageData,
+    mode,
+  );
+  cleanupState.sourceLane = 'clothed_guide';
+  if (!cleanupState.operations.includes('lane_c_assisted_mask')) {
+    cleanupState.operations.push('lane_c_assisted_mask');
+  }
+  cleanupState.mlAssist = {
+    backend: 'cv',
+    style_strength: parseInt(c.laneCStyle?.value || '35', 10) / 100,
+    apply_mode: mode,
+    proposal_stats: cleanupState.proposalStats,
+  };
+  putCanvasImageData(cleanupState.candidateCanvas, cleanupState.candidateImageData);
+  await setPendingAssetFromCleanup();
+  await renderCleanupBodyPreview();
+  await updateCleanupWarnings();
 }
 
 async function applyCleanupFromControls({ preserveManual = true } = {}) {
@@ -402,8 +547,10 @@ async function applyCleanupFromControls({ preserveManual = true } = {}) {
 
   cleanupState.sourceLane = c.lane?.value || 'transparent_png';
   cleanupState.operations = operations;
+  cleanupState.mlAssist = null;
   cleanupState.candidateImageData = img;
   putCanvasImageData(cleanupState.candidateCanvas, img);
+  syncLaneCAssistVisibility();
   syncWorkbenchBodySubtract();
   await setPendingAssetFromCleanup();
   await renderCleanupBodyPreview();
@@ -513,6 +660,22 @@ async function updateCleanupWarnings() {
   if (sourceStats.coverage > 0.98) warnings.push('Source appears to have no useful alpha channel.');
   if (stats.coverage < 0.002 || stats.opaquePixels < 128) warnings.push('Asset is nearly empty after cleanup.');
   if (stats.coverage > 0.92) warnings.push('Likely opaque background remains.');
+  if (cleanupState.sourceLane === 'clothed_guide') {
+    const proposalStats = cleanupState.proposalStats || cleanupState.mlAssist?.proposal_stats;
+    const flags = proposalStats?.warnings || {};
+    if (flags.empty || flags.overclean || flags.coverage_drop) {
+      warnings.push('Assisted mask removed most of the asset.');
+    }
+    if (flags.proposal_diff) {
+      warnings.push('Assisted proposal differs sharply from the current cleaned candidate.');
+    }
+    if (flags.body_background_likely) {
+      warnings.push('Likely body or background residue remains.');
+    }
+    if (flags.outline_damage || (proposalStats?.edge_preservation_score ?? 1) < 0.82) {
+      warnings.push('Stylized outlines may have been damaged.');
+    }
+  }
 
   const docCanvas = document.createElement('canvas');
   const docW = DOLL_CONFIG.canvas?.width || 768;
@@ -611,8 +774,7 @@ function wireCleanupWorkbench() {
   const c = cleanupControls();
   const allControls = [
     c.lane, c.whiteBg, c.colorKey, c.keyColor, c.keyTol, c.alpha, c.halo,
-    c.largest, c.islands, c.islandSize, c.bodySubtract, c.allowedOverlay,
-    c.forbiddenOverlay,
+    c.largest, c.islands, c.islandSize, c.bodySubtract,
   ].filter(Boolean);
   for (const control of allControls) {
     control.addEventListener('input', () => applyCleanupFromControls());
@@ -628,8 +790,33 @@ function wireCleanupWorkbench() {
         if (c.allowedOverlay) c.allowedOverlay.checked = true;
         if (c.forbiddenOverlay) c.forbiddenOverlay.checked = true;
       }
+      syncLaneCAssistVisibility();
       applyCleanupFromControls({ preserveManual: false });
     });
+  }
+
+  [c.allowedOverlay, c.forbiddenOverlay].filter(Boolean).forEach(control => {
+    control.addEventListener('input', async () => {
+      await renderCleanupBodyPreview();
+      await updateCleanupWarnings();
+    });
+    control.addEventListener('change', async () => {
+      await renderCleanupBodyPreview();
+      await updateCleanupWarnings();
+    });
+  });
+
+  if (c.laneCStyle) {
+    c.laneCStyle.addEventListener('input', syncCleanupControlLabels);
+  }
+  if (c.laneCOverlay) {
+    c.laneCOverlay.addEventListener('change', drawLaneCProposalPreview);
+  }
+  if (c.laneCGenerate) {
+    c.laneCGenerate.addEventListener('click', generateLaneCProposal);
+  }
+  if (c.laneCApply) {
+    c.laneCApply.addEventListener('click', applyLaneCProposal);
   }
 
   if (c.brush) {
@@ -703,6 +890,7 @@ function wireCleanupWorkbench() {
     });
   }
   syncCleanupControlLabels();
+  syncLaneCAssistVisibility();
 }
 
 // Compose AI-cached or raw source. Chroma-only previews stay as source-space

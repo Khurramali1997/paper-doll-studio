@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyAlphaThreshold,
+  applyMaskProposal,
+  buildCleanupMetadata,
   countVisibleMaskOverlap,
   getAlphaStats,
   keepLargestConnectedComponent,
@@ -86,5 +88,61 @@ describe('cleanup utilities', () => {
     const overlap = countVisibleMaskOverlap(img, mask);
     expect(stats.coverage).toBe(0.5);
     expect(overlap).toEqual({ overlap: 1, visible: 2 });
+  });
+
+  it('applies proposal alpha by replacing current alpha', () => {
+    const source = imageData(2, 1, [10, 20, 30, 255]);
+    const current = imageData(2, 1, [10, 20, 30, 255]);
+    const proposal = imageData(2, 1, [10, 20, 30, 0]);
+    setPixel(proposal, 1, 0, [10, 20, 30, 255]);
+    const out = applyMaskProposal(current, proposal, source, 'replace');
+    expect(out.data[3]).toBe(0);
+    expect(out.data[7]).toBe(255);
+  });
+
+  it('applies proposal alpha by unioning with current alpha', () => {
+    const source = imageData(2, 1, [10, 20, 30, 255]);
+    const current = imageData(2, 1, [10, 20, 30, 0]);
+    setPixel(current, 0, 0, [10, 20, 30, 255]);
+    const proposal = imageData(2, 1, [10, 20, 30, 0]);
+    setPixel(proposal, 1, 0, [10, 20, 30, 180]);
+    const out = applyMaskProposal(current, proposal, source, 'union');
+    expect(out.data[3]).toBe(255);
+    expect(out.data[7]).toBe(180);
+  });
+
+  it('applies proposal alpha by intersecting with current alpha', () => {
+    const source = imageData(2, 1, [10, 20, 30, 255]);
+    const current = imageData(2, 1, [10, 20, 30, 255]);
+    const proposal = imageData(2, 1, [10, 20, 30, 0]);
+    setPixel(proposal, 1, 0, [10, 20, 30, 128]);
+    const out = applyMaskProposal(current, proposal, source, 'intersect');
+    expect(out.data[3]).toBe(0);
+    expect(out.data[7]).toBe(128);
+  });
+
+  it('records Lane C assist metadata', () => {
+    const metadata = buildCleanupMetadata({
+      sourceLane: 'clothed_guide',
+      operations: ['lane_c_assisted_mask'],
+      manualEdits: 2,
+      mlAssist: {
+        backend: 'cv',
+        style_strength: 0.35,
+        apply_mode: 'union',
+        proposal_stats: { coverage: 0.2 },
+      },
+    });
+    expect(metadata).toEqual({
+      source_lane: 'clothed_guide',
+      operations: ['lane_c_assisted_mask'],
+      manual_edits: 2,
+      ml_assist: {
+        backend: 'cv',
+        style_strength: 0.35,
+        apply_mode: 'union',
+        proposal_stats: { coverage: 0.2 },
+      },
+    });
   });
 });

@@ -26,9 +26,11 @@ from compiler.guide_templates import build_guides_zip
 from compiler.rig_autodetect import detect_anchors, build_rig
 from compiler.reference_pack import build_reference_pack
 from compiler.ai_segmenter import process as ai_process
+from compiler.cleanup_assist import propose_lane_c_mask
 
 import io as _io
 import json as _json
+import base64 as _base64
 from PIL import Image as _PILImage
 
 BASE_RIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "base_rig")
@@ -68,6 +70,7 @@ async def compile_asset(
     force_chromakey: bool = Form(False),
     crop_to_allowed_region: bool = Form(False),
     auto_clean_face: bool = Form(False),
+    cleanup_metadata: str = Form(None),
 ):
     if not image.filename:
         raise HTTPException(400, "No image file provided")
@@ -109,6 +112,13 @@ async def compile_asset(
         }
         if anchors_dict:
             options["confirmed_anchors"] = anchors_dict
+        if cleanup_metadata:
+            try:
+                cleanup_dict = json.loads(cleanup_metadata)
+                if isinstance(cleanup_dict, dict):
+                    options["cleanup"] = cleanup_dict
+            except json.JSONDecodeError:
+                pass
 
         metadata = compiler.compile_asset(tmp_path, category, options)
 
@@ -241,6 +251,56 @@ async def ai_process_endpoint(
     buf = _io.BytesIO()
     result.save(buf, format="PNG")
     return Response(content=buf.getvalue(), media_type="image/png")
+
+
+@app.post("/api/cleanup-assist/lane-c")
+async def cleanup_assist_lane_c(
+    image: UploadFile = File(...),
+    category: str = Form(""),
+    style_strength: float = Form(0.35),
+    current_mask: Optional[UploadFile] = File(None),
+    use_bg_remove: bool = Form(False),
+):
+    """Return a local CV mask proposal for Lane C clothed guide cleanup.
+
+    This endpoint is proposal-only. It does not generate artwork and does not
+    expose the disabled AI clothing isolation mode.
+    """
+    if not image.filename:
+        raise HTTPException(400, "No image file provided")
+    try:
+        src = _PILImage.open(_io.BytesIO(await image.read())).convert("RGBA")
+        current = None
+        if current_mask and current_mask.filename:
+            current = _PILImage.open(_io.BytesIO(await current_mask.read())).convert("RGBA")
+
+        bg_removed = None
+        if use_bg_remove:
+            try:
+                bg_removed = ai_process(src, "bg-remove")
+            except Exception:
+                bg_removed = None
+
+        result = propose_lane_c_mask(
+            src,
+            category=category,
+            style_strength=style_strength,
+            current_mask=current,
+            bg_removed=bg_removed,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Cleanup assist failed: {e}")
+
+    proposal_buf = _io.BytesIO()
+    alpha_buf = _io.BytesIO()
+    result.proposal.save(proposal_buf, format="PNG")
+    result.alpha.save(alpha_buf, format="PNG")
+    return JSONResponse({
+        "success": True,
+        "proposal_png": _base64.b64encode(proposal_buf.getvalue()).decode("ascii"),
+        "alpha_png": _base64.b64encode(alpha_buf.getvalue()).decode("ascii"),
+        "stats": result.stats,
+    })
 
 
 @app.get("/api/guide-templates.zip")

@@ -307,6 +307,8 @@ class AssetCompiler:
                 "chromakey_applied": chromakey_applied,
             },
         }
+        if isinstance(options.get("cleanup"), dict):
+            metadata["cleanup"] = options["cleanup"]
         
         with open(os.path.join(pack_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
