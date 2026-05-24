@@ -988,8 +988,17 @@ async function buildTailorAsset() {
 
   try {
     const silCanvas = await generateBodySilhouetteCanvas();
-    const silBlob = await new Promise(resolve => silCanvas.toBlob(resolve, 'image/png'));
-    if (silBlob) fd.append('body_silhouette', silBlob, 'body_silhouette.png');
+    const silData = silCanvas.getContext('2d').getImageData(0, 0, silCanvas.width, silCanvas.height).data;
+    let hasBody = false;
+    for (let i = 3; i < silData.length; i += 4) { if (silData[i] > 10) { hasBody = true; break; } }
+    if (hasBody) {
+      const [silBlob, compBlob] = await Promise.all([
+        new Promise(resolve => silCanvas.toBlob(resolve, 'image/png')),
+        generateBodyCompositeCanvas().then(c => new Promise(resolve => c.toBlob(resolve, 'image/png'))),
+      ]);
+      if (silBlob) fd.append('body_silhouette', silBlob, 'body_silhouette.png');
+      if (compBlob) fd.append('body_composite', compBlob, 'body_composite.png');
+    }
   } catch { /* no PSD loaded — server falls back to static mask */ }
 
   try {

@@ -707,6 +707,7 @@ def build_mask_from_recipe(
     rig_anchors: Optional[Dict] = None,
     semantic: Optional[Dict] = None,
     body_silhouette_arr: Optional[np.ndarray] = None,
+    derived_anchors: Optional[Dict] = None,
 ) -> Tuple[np.ndarray, List[str]]:
     """Build garment mask from body_silhouette contour + semantic modifications.
 
@@ -723,6 +724,11 @@ def build_mask_from_recipe(
 
     The body_silhouette drives shape. Anchors are Y-range and cutout-position
     references. Semantic hints say what kind of neckline/hem to carve out.
+
+    When ``derived_anchors`` is provided (e.g. from DWPose keypoints), its
+    entries override both rig anchors and garment anchors — allowing the
+    tailor to use the uploaded PSD's actual body proportions rather than the
+    static rig.json.
     """
     if recipe_name not in RECIPES:
         raise ValueError(f"Unknown recipe: {recipe_name!r}. Available: {list(RECIPES)}")
@@ -739,8 +745,16 @@ def build_mask_from_recipe(
         ra = rig_anchors
     ga_all = rig_data.get("garment_anchors", {})
     ga_key  = _GA_CATEGORY_KEY.get(category, category)
-    ga      = ga_all.get(ga_key, {})
+    ga      = dict(ga_all.get(ga_key, {}))
     H = W = 768
+
+    # Override both ra and ga with derived anchors (DWPose, etc.) when available.
+    # derived_anchors maps anchor names to [x, y] — same format as rig.json.
+    if derived_anchors:
+        ra.update(derived_anchors)
+        ga.update(derived_anchors)
+        ops.append(f"anchors:derived({len(derived_anchors)} overrides)")
+
     ops.append(f"rig:anchors={len(ra)} garment_anchors={len(ga)}")
 
     # 2. Body silhouette IS the authoritative character contour.
@@ -867,6 +881,7 @@ def construct_pattern(
     rig_anchors: Optional[Dict] = None,
     semantic: Optional[Dict] = None,
     body_silhouette_arr: Optional[np.ndarray] = None,
+    derived_anchors: Optional[Dict] = None,
 ) -> Dict:
     """Full pipeline: recipe → rendered BGRA asset.
 
@@ -880,6 +895,7 @@ def construct_pattern(
                     "smooth_px": int, "flare_px": int, "taper_px": int}
     rig_anchors  : optional override for rig anchor positions
     semantic     : optional pre-computed semantic_layer.annotate() result to reuse
+    derived_anchors : live-derived anchors (e.g. from DWPose) that override rig.json
 
     Returns
     -------
@@ -899,6 +915,7 @@ def construct_pattern(
         rig_anchors=rig_anchors,
         semantic=semantic,
         body_silhouette_arr=body_silhouette_arr,
+        derived_anchors=derived_anchors,
     )
 
     if not mask.any():

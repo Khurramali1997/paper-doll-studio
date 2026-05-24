@@ -472,6 +472,7 @@ async def construct_pattern_endpoint(
     color: str = Form("#ffffff"),
     texture: Optional[UploadFile] = File(None),
     body_silhouette: Optional[UploadFile] = File(None),
+    body_composite: Optional[UploadFile] = File(None),
     expand_x: int = Form(0),
     expand_y: int = Form(0),
     dilate_px: int = Form(0),
@@ -507,6 +508,27 @@ async def construct_pattern_endpoint(
                 gray = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY) if decoded.ndim == 3 else decoded
                 body_silhouette_arr = np.where(gray > 10, np.uint8(255), np.uint8(0))
 
+    if body_silhouette_arr is None:
+        raise HTTPException(400, "No PSD loaded — load a character before using the Digital Tailor")
+
+    # Derive anchors from PSD body (DWPose) when we have both composite + silhouette.
+    derived_anchors = None
+    if body_silhouette_arr is not None and body_composite and body_composite.filename:
+        try:
+            from compiler.dwpose_estimator import estimate_pose
+            raw = await body_composite.read()
+            arr = np.frombuffer(raw, np.uint8)
+            bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if bgr is not None:
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                composite_pil = _PILImage.fromarray(rgb, mode="RGB")
+                kps = estimate_pose(composite_pil, body_silhouette_arr)
+                if kps:
+                    derived_anchors = kps
+                    print(f"derive_anchors: DWPose returned {len(kps)} keypoints")
+        except Exception as e:
+            print(f"derive_anchors: DWPose failed, falling back to rig.json: {e}")
+
     rig_anchors = None
     rig_path = os.path.join(BASE_RIG_DIR, "rig.json")
     if os.path.exists(rig_path):
@@ -539,6 +561,7 @@ async def construct_pattern_endpoint(
             material=material, effects=effects, transform=transform,
             rig_anchors=rig_anchors, semantic=semantic,
             body_silhouette_arr=body_silhouette_arr,
+            derived_anchors=derived_anchors,
         )
     except Exception as e:
         raise HTTPException(500, f"Pattern construction failed: {e}")
