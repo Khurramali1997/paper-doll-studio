@@ -5,6 +5,60 @@ import { canvasToBlob, downloadBlob, getBoundingBox, loadImage } from './utils.j
 import { receiveAssetForCleanup } from './import.js';
 
 const STORAGE_KEY = 'paperdoll_user_stencils_v1';
+const IDB_NAME    = 'paperdoll_stencils';
+const IDB_STORE   = 'stencils';
+const IDB_VERSION = 1;
+
+// ---------------------------------------------------------------------------
+// IndexedDB persistence (replaces localStorage — no 5 MB quota)
+// ---------------------------------------------------------------------------
+
+let _idb = null;
+
+function _openIDB() {
+  if (_idb) return Promise.resolve(_idb);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = e => { _idb = e.target.result; resolve(_idb); };
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function _idbPut(record) {
+  const db = await _openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put(record);
+    tx.oncomplete = resolve;
+    tx.onerror    = () => reject(tx.error);
+  });
+}
+
+async function _idbDelete(id) {
+  const db = await _openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror    = () => reject(tx.error);
+  });
+}
+
+async function _idbGetAll() {
+  const db = await _openIDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
 const MASKS = [
   ['body_silhouette', 'Body silhouette'],
   ['character_composite', 'Character composite'],
@@ -262,28 +316,62 @@ function canvasFromBase64(base64) {
   });
 }
 
+// IDB stores one record per stencil: { id, name, source, order, dataUrl }
+// saveStencils is called fire-and-forget (no await at call sites).
 function saveStencils() {
-  const serializable = editor.stencils.map(stencil => ({
-    id: stencil.id,
-    name: stencil.name,
-    source: stencil.source,
-    dataUrl: canvasToDataUrl(stencil.canvas),
-  }));
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+  _saveStencilsAsync().catch(err => console.warn('saveStencils failed:', err));
+}
+
+async function _saveStencilsAsync() {
+  // Write/update every current stencil.
+  const currentIds = new Set(editor.stencils.map(s => s.id));
+  await Promise.all(editor.stencils.map((stencil, i) =>
+    _idbPut({
+      id:     stencil.id,
+      name:   stencil.name,
+      source: stencil.source,
+      order:  i,
+      dataUrl: canvasToDataUrl(stencil.canvas),
+    })
+  ));
+  // Delete any IDB records that are no longer in editor.stencils.
+  const all = await _idbGetAll();
+  await Promise.all(
+    all.filter(r => !currentIds.has(r.id)).map(r => _idbDelete(r.id))
+  );
 }
 
 async function loadStoredStencils() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const stored = JSON.parse(raw);
+    const records = await _idbGetAll();
+    if (!records.length) {
+      // One-time migration from localStorage if IDB is empty.
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const stored = JSON.parse(raw);
+        editor.stencils = [];
+        for (const stencil of stored) {
+          editor.stencils.push({
+            id:     stencil.id,
+            name:   stencil.name,
+            source: stencil.source,
+            canvas: await dataUrlToCanvas(stencil.dataUrl),
+          });
+        }
+        editor.selectedId = editor.stencils[0]?.id || null;
+        saveStencils(); // persist migrated data to IDB
+        localStorage.removeItem(STORAGE_KEY);
+      }
+      return;
+    }
+    records.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     editor.stencils = [];
-    for (const stencil of stored) {
+    for (const r of records) {
       editor.stencils.push({
-        id: stencil.id,
-        name: stencil.name,
-        source: stencil.source,
-        canvas: await dataUrlToCanvas(stencil.dataUrl),
+        id:     r.id,
+        name:   r.name,
+        source: r.source,
+        canvas: await dataUrlToCanvas(r.dataUrl),
       });
     }
     editor.selectedId = editor.stencils[0]?.id || null;
