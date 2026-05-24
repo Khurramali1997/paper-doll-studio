@@ -98,9 +98,22 @@ def make_outline(silhouette: Image.Image, stroke: int = OUTLINE_STROKE) -> Image
     return Image.fromarray(arr, mode="RGBA")
 
 
-def make_canny(silhouette: Image.Image, lo: int = 50, hi: int = 150) -> Image.Image:
-    mask = _silhouette_to_mask(silhouette)
-    edges = cv2.Canny(mask, lo, hi)
+def make_canny(
+    silhouette: Image.Image,
+    source: Optional[Image.Image] = None,
+    lo: int = 50,
+    hi: int = 150,
+) -> Image.Image:
+    src = source.convert("RGBA") if source is not None else silhouette.convert("RGBA")
+    rgb = np.array(src.convert("RGB"))
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    if source is None:
+        mask = _silhouette_to_mask(silhouette)
+        gray = mask
+    else:
+        alpha = np.array(src.getchannel("A"))
+        gray = np.where(alpha > 10, gray, 0).astype(np.uint8)
+    edges = cv2.Canny(gray, lo, hi)
     rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
     return Image.fromarray(rgb, mode="RGB")
 
@@ -199,6 +212,30 @@ def build_reference_pack(
                       and real ONNX depth estimation. When omitted, both
                       channels fall back to silhouette-only approximations.
     """
+    channels = build_reference_channels(
+        silhouette,
+        anchors=anchors,
+        body_composite=body_composite,
+    )
+    return build_reference_zip(channels)
+
+
+def build_reference_zip(channels: List[Tuple[str, Image.Image]]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, img in channels:
+            png_buf = io.BytesIO()
+            img.save(png_buf, "PNG")
+            zf.writestr(name, png_buf.getvalue())
+    return buf.getvalue()
+
+
+def build_reference_channels(
+    silhouette: Image.Image,
+    anchors: Optional[Dict[str, List[int]]] = None,
+    body_composite: Optional[Image.Image] = None,
+) -> List[Tuple[str, Image.Image]]:
+    """Return the raw reference images without zipping them."""
     w, h = silhouette.size
 
     pose_img: Optional[Image.Image] = None
@@ -210,16 +247,9 @@ def build_reference_pack(
     channels: List[Tuple[str, Image.Image]] = [
         ("silhouette.png", silhouette),
         ("outline.png",    make_outline(silhouette)),
-        ("canny.png",      make_canny(silhouette)),
+        ("canny.png",      make_canny(silhouette, source=body_composite)),
         ("depth.png",      make_depth(silhouette, depth_source=body_composite)),
     ]
     if pose_img is not None:
         channels.append(("pose.png", pose_img))
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name, img in channels:
-            png_buf = io.BytesIO()
-            img.save(png_buf, "PNG")
-            zf.writestr(name, png_buf.getvalue())
-    return buf.getvalue()
+    return channels

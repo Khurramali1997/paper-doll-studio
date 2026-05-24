@@ -14,7 +14,7 @@ from pathlib import Path
 
 import mimetypes
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -24,14 +24,17 @@ from compiler.category_registry import ALL_CATEGORIES
 from compiler.compiler import AssetCompiler
 from compiler.guide_templates import build_guides_zip
 from compiler.rig_autodetect import detect_anchors, build_rig
-from compiler.reference_pack import build_reference_pack
+from compiler.reference_pack import build_reference_pack, build_reference_channels
 from compiler.ai_segmenter import process as ai_process
 from compiler.cleanup_assist import propose_lane_c_mask
+from compiler.stencil_pipeline import run_pipeline as _run_stencil_pipeline, PIPELINE_CONFIG as _STENCIL_DEFAULTS
 
 import io as _io
 import json as _json
 import base64 as _base64
 from PIL import Image as _PILImage
+import cv2
+import numpy as np
 
 BASE_RIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "base_rig")
 
@@ -227,6 +230,37 @@ async def reference_pack(
     )
 
 
+@app.post("/api/reference-channels")
+async def reference_channels(
+    image: UploadFile = File(...),
+    body: Optional[UploadFile] = File(None),
+):
+    """Return the raw reference pack channels as base64 PNGs."""
+    if not image.filename:
+        raise HTTPException(400, "No silhouette image provided")
+    try:
+        sil = _PILImage.open(_io.BytesIO(await image.read()))
+        body_img = _PILImage.open(_io.BytesIO(await body.read())) if (body and body.filename) else None
+        anchors = None
+        rig_path = os.path.join(BASE_RIG_DIR, "rig.json")
+        if os.path.exists(rig_path):
+            try:
+                with open(rig_path) as f:
+                    anchors = _json.load(f).get("anchors")
+            except Exception:
+                anchors = None
+        channels = build_reference_channels(sil, anchors=anchors, body_composite=body_img)
+    except Exception as e:
+        raise HTTPException(500, f"Reference channels failed: {e}")
+
+    out = {}
+    for name, img in channels:
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        out[name] = _base64.b64encode(buf.getvalue()).decode("ascii")
+    return JSONResponse(out)
+
+
 @app.post("/api/ai-process")
 async def ai_process_endpoint(
     image: UploadFile = File(...),
@@ -300,6 +334,221 @@ async def cleanup_assist_lane_c(
         "proposal_png": _base64.b64encode(proposal_buf.getvalue()).decode("ascii"),
         "alpha_png": _base64.b64encode(alpha_buf.getvalue()).decode("ascii"),
         "stats": result.stats,
+    })
+
+
+@app.post("/api/stencil-pipeline")
+async def stencil_pipeline_endpoint(
+    garments: List[UploadFile] = File(...),
+    stencil_masks: List[UploadFile] = File(None),
+    label: str = Form("garment"),
+    config_override: str = Form(None),
+):
+    """Run the deterministic garment post-processing pipeline.
+
+    Accepts one or more compiled garment PNGs (RGBA, in depth order: first =
+    deepest). Stencil masks are optional — when omitted the garment's own alpha
+    is used as the mask boundary.
+
+    Depth is auto-generated from the body silhouette using the same
+    distance-transform proxy that the reference-pack generator uses. No depth
+    upload is needed.
+
+    Returns base64-encoded RGBA PNGs for each layer and the composite, plus
+    the asset manifest entry.
+    """
+    if not garments:
+        raise HTTPException(400, "At least one garment file required")
+
+    cfg_overrides = {}
+    if config_override:
+        try:
+            parsed = json.loads(config_override)
+            if isinstance(parsed, dict):
+                cfg_overrides = parsed
+        except json.JSONDecodeError:
+            pass
+
+    try:
+        garment_arrays = []
+        for gf in garments:
+            content = await gf.read()
+            arr = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_UNCHANGED)
+            if arr is None:
+                raise HTTPException(400, f"Cannot decode garment: {gf.filename}")
+            garment_arrays.append(arr)
+
+        mask_arrays = []
+        if stencil_masks:
+            for mf in stencil_masks:
+                if not mf.filename:
+                    continue
+                content = await mf.read()
+                arr = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_UNCHANGED)
+                if arr is not None:
+                    mask_arrays.append(arr)
+
+        # Auto-generate depth from the body silhouette using the existing
+        # reference-pack make_depth function — same proxy already used for guides.
+        depth_arr: Optional[np.ndarray] = None
+        try:
+            from compiler.reference_pack import make_depth as _make_depth
+            sil_path = os.path.join(BASE_RIG_DIR, "masks", "body_silhouette.png")
+            if os.path.exists(sil_path):
+                sil_pil = _PILImage.open(sil_path).convert("RGB")
+                depth_pil = _make_depth(sil_pil)
+                buf = _io.BytesIO()
+                depth_pil.save(buf, format="PNG")
+                depth_arr = cv2.imdecode(
+                    np.frombuffer(buf.getvalue(), np.uint8), cv2.IMREAD_GRAYSCALE
+                )
+        except Exception:
+            depth_arr = None  # centroid-distance fallback is fine
+
+        # Load rig anchors for semantic annotation
+        rig_anchors = None
+        try:
+            rig_json_path = os.path.join(BASE_RIG_DIR, "rig.json")
+            if os.path.exists(rig_json_path):
+                import json as _json
+                with open(rig_json_path) as _f:
+                    rig_anchors = _json.load(_f).get("anchors")
+        except Exception:
+            pass
+
+        with tempfile.TemporaryDirectory(prefix="stencil_pipeline_") as tmp_dir:
+            manifest_path = os.path.join(
+                "public", "assets", "fabric_pipeline", "asset_manifest.json"
+            )
+            cfg = {
+                **_STENCIL_DEFAULTS,
+                **cfg_overrides,
+                "manifest_path": manifest_path,
+                "save_intermediates": bool(cfg_overrides.get("save_intermediates", False)),
+                "base_rig_dir": BASE_RIG_DIR,
+                "rig_anchors": rig_anchors,
+            }
+
+            result = _run_stencil_pipeline(
+                garments=garment_arrays,
+                stencil_masks=mask_arrays or None,
+                depth_map=depth_arr,
+                label=label,
+                config=cfg,
+                out_dir=tmp_dir,
+            )
+
+            _, comp_buf = cv2.imencode(".png", result["composite_rgba"])
+            composite_b64 = _base64.b64encode(comp_buf.tobytes()).decode("ascii")
+
+            layer_images = []
+            for layer in result["layers"]:
+                _, lbuf = cv2.imencode(".png", layer["rgba"])
+                layer_images.append({
+                    "label": layer["label"],
+                    "image_b64": _base64.b64encode(lbuf.tobytes()).decode("ascii"),
+                    "bbox": layer["bbox"],
+                    "contour_point_count": len(layer["contour_pts"]),
+                    "semantic": layer.get("semantic", {}),
+                })
+
+        return {
+            "success": True,
+            "asset_id": result["asset_id"],
+            "composite_b64": composite_b64,
+            "layer_images": layer_images,
+            "manifest_entry": result["manifest_entry"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Stencil pipeline failed: {e}")
+
+
+@app.post("/api/construct-pattern")
+async def construct_pattern_endpoint(
+    recipe: str = Form(...),
+    color: str = Form("#ffffff"),
+    texture: Optional[UploadFile] = File(None),
+    expand_x: int = Form(0),
+    expand_y: int = Form(0),
+    dilate_px: int = Form(0),
+    erode_px: int = Form(0),
+    smooth_px: int = Form(2),
+    flare_px: int = Form(0),
+    taper_px: int = Form(0),
+    edge_stroke: str = Form("true"),
+    inner_shadow: str = Form("true"),
+    highlight: str = Form("false"),
+    semantic_json: str = Form(""),  # optional: pre-computed semantic_layer result
+):
+    from compiler.pattern_constructor import construct_pattern, RECIPES
+    if recipe not in RECIPES:
+        raise HTTPException(400, f"Unknown recipe: {recipe!r}")
+
+    texture_arr = None
+    if texture and texture.filename:
+        raw = await texture.read()
+        arr = np.frombuffer(raw, np.uint8)
+        texture_arr = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+
+    rig_anchors = None
+    rig_path = os.path.join(BASE_RIG_DIR, "rig.json")
+    if os.path.exists(rig_path):
+        with open(rig_path) as f:
+            rig_anchors = json.load(f).get("anchors")
+
+    semantic = None
+    if semantic_json:
+        try:
+            semantic = json.loads(semantic_json)
+        except Exception:
+            pass
+
+    material = {"type": "texture" if texture_arr is not None else "solid",
+                "color": color, "texture_arr": texture_arr}
+    effects = {
+        "edge_stroke": edge_stroke.lower() == "true",
+        "inner_shadow": inner_shadow.lower() == "true",
+        "highlight": highlight.lower() == "true",
+    }
+    transform = {
+        "expand_x": expand_x, "expand_y": expand_y,
+        "dilate_px": dilate_px, "erode_px": erode_px,
+        "smooth_px": smooth_px, "flare_px": flare_px, "taper_px": taper_px,
+    }
+
+    try:
+        result = construct_pattern(
+            recipe, BASE_RIG_DIR,
+            material=material, effects=effects, transform=transform,
+            rig_anchors=rig_anchors, semantic=semantic,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Pattern construction failed: {e}")
+
+    ok, buf = cv2.imencode(".png", result["image_rgba"])
+    if not ok:
+        raise HTTPException(500, "PNG encode failed")
+    image_b64 = _base64.b64encode(buf.tobytes()).decode()
+
+    return JSONResponse({
+        "success": True,
+        "image_b64": image_b64,
+        "pattern": {
+            "type": "pattern",
+            "recipe": result["recipe"],
+            "category": result["category"],
+            "operations": result["operations"],
+            "material": {"type": material["type"], "color": color},
+            "effects": effects,
+            "contour_points": result["contour_points"],
+            "bounding_box": result["bounding_box"],
+            "area_px": result["area_px"],
+            "coverage_pct": result["coverage_pct"],
+            "warnings": result["warnings"],
+        },
     })
 
 

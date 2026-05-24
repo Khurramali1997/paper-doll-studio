@@ -5,6 +5,7 @@ import { initCalibration, setCalibrationTabActive, buildCalibrateOptions, update
 import { initImport, updateAlignUI } from './js/import.js';
 import { downloadConfig, downloadStateJSON, exportZIP, downloadBodySilhouette, downloadReferencePack } from './js/export.js';
 import { initFitPreview, clearFitPreview } from './js/fit_preview.js';
+import { initStencils } from './js/stencils.js';
 
 // DOM refs
 const targetContainer = document.getElementById('doll-layers-target');
@@ -32,6 +33,7 @@ async function init() {
   initCalibration(targetContainer);
   initImport(targetContainer);
   initFitPreview(targetContainer);
+  await initStencils();
 
   // Chroma/subtract visibility toggle
   wireCheckboxVisibility();

@@ -86,6 +86,9 @@
           <button class="tab-btn" data-tab="calibration">
             <span class="tab-icon">📐</span> Calibrate
           </button>
+          <button class="tab-btn" data-tab="stencils">
+            <span class="tab-icon">▧</span> Stencils
+          </button>
           <button class="tab-btn" data-tab="studio">
             <span class="tab-icon">⚙️</span> Studio
           </button>
@@ -203,7 +206,227 @@
             </div>
           </div>
 
-          <!-- Tab 5: Studio Tools (PSD import, background removal, zip export) -->
+          <!-- Tab 5: Stencil Sandbox -->
+          <div class="tab-pane" id="tab-stencils">
+            <div class="control-group stencil-sandbox">
+              <h3>Stencil Sandbox</h3>
+              <p class="group-desc">Duplicate rig masks into editable local stencils. Edits stay in this browser until exported.</p>
+
+              <div class="stencil-grid">
+                <div class="align-control">
+                  <label for="select-stencil-source">Source mask</label>
+                  <select id="select-stencil-source"></select>
+                </div>
+                <div class="align-control">
+                  <label for="select-user-stencil">Editable stencil</label>
+                  <select id="select-user-stencil"></select>
+                </div>
+              </div>
+
+              <div class="stencil-actions">
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-duplicate">Duplicate</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-export-source">Export Source</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-export-edit">Export Edit</button>
+              </div>
+
+              <div class="stencil-geometry">
+                <div class="align-control">
+                  <label for="range-stencil-depth-cutoff">Depth percentile <span id="val-stencil-depth-cutoff">58</span></label>
+                  <input type="range" id="range-stencil-depth-cutoff" min="0" max="100" value="58">
+                </div>
+                <div class="align-control">
+                  <label for="range-stencil-edge-grow">Canny grow <span id="val-stencil-edge-grow">8</span>px</label>
+                  <input type="range" id="range-stencil-edge-grow" min="0" max="32" value="8">
+                </div>
+                <button type="button" class="action-btn accent" id="btn-stencil-geometry">Generate Geometry Variants</button>
+              </div>
+
+              <div class="stencil-gallery" id="stencil-gallery"></div>
+
+              <div class="align-control stencil-name-row">
+                <label for="txt-user-stencil-name">Name</label>
+                <input type="text" id="txt-user-stencil-name" value="Custom Stencil">
+              </div>
+
+              <div class="stencil-editor-shell">
+                <canvas id="stencil-editor-canvas" width="360" height="360"></canvas>
+              </div>
+
+              <div class="stencil-tool-row">
+                <button type="button" class="cleanup-tool-btn active" id="btn-stencil-paint">Paint</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-erase">Erase</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-crop">Crop</button>
+                <label for="range-stencil-brush">Brush <span id="val-stencil-brush">18</span></label>
+                <input type="range" id="range-stencil-brush" min="2" max="96" value="18">
+              </div>
+
+              <div class="stencil-actions">
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-apply-crop">Apply Crop</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-expand">Expand</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-shrink">Shrink</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-feather">Feather</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-invert">Invert</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-undo">Undo</button>
+                <button type="button" class="cleanup-tool-btn" id="btn-stencil-delete">Delete</button>
+              </div>
+
+              <div id="stencil-status" class="status-box stencil-status" style="display: none;"></div>
+            </div>
+
+            <!-- Fabric Asset Generator -->
+            <details class="control-group" id="details-fabric-pipeline" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+              <summary style="cursor: pointer; font-weight: 600; font-size: 0.85rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                <span>Fabric Asset Generator</span>
+                <span style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
+              </summary>
+              <div style="margin-top: 0.6rem;">
+                <p class="group-desc" style="margin-bottom: 0.5rem; font-size: 0.68rem;">Apply warp correction, depth lighting, seam markup, and semantic annotation to a compiled wardrobe asset. Depth is auto-generated from the body silhouette.</p>
+
+                <div class="align-control" style="margin-bottom: 0.4rem;">
+                  <label for="select-fabric-wardrobe" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Garment — pick from wardrobe</label>
+                  <select id="select-fabric-wardrobe" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">
+                    <option value="">— loading wardrobe… —</option>
+                  </select>
+                </div>
+
+                <details style="margin-bottom: 0.4rem;">
+                  <summary style="font-size: 0.65rem; color: var(--text-secondary); cursor: pointer; list-style: none; margin-bottom: 0.25rem;">or upload a custom garment PNG</summary>
+                  <input type="file" id="input-fabric-garments" accept="image/png,image/*" multiple style="width: 100%; font-size: 0.7rem; color: var(--text-primary); margin-top: 0.25rem;">
+                </details>
+
+                <div class="align-control" style="margin-bottom: 0.4rem;">
+                  <label for="select-fabric-near-stencil" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Mask override — stencil (optional)</label>
+                  <select id="select-fabric-near-stencil" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;"></select>
+                </div>
+
+                <div class="align-control" style="margin-bottom: 0.4rem;">
+                  <label for="txt-fabric-label" style="font-size: 0.7rem; color: var(--text-secondary);">Label (auto-set from wardrobe)</label>
+                  <input type="text" id="txt-fabric-label" value="garment" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">
+                </div>
+
+                <details style="margin-bottom: 0.5rem; background: rgba(0,0,0,0.1); padding: 0.5rem; border-radius: 6px; border: 1px dashed var(--border-glass);">
+                  <summary style="cursor: pointer; font-size: 0.68rem; color: var(--text-secondary); list-style: none;">Pipeline parameters</summary>
+                  <div style="margin-top: 0.4rem;" class="cleanup-control-grid">
+                    <div class="align-control">
+                      <label for="range-fabric-warp-strength">Warp strength <span id="val-fabric-warp-strength">35</span>%</label>
+                      <input type="range" id="range-fabric-warp-strength" min="0" max="100" value="35">
+                    </div>
+                    <div class="align-control">
+                      <label for="range-fabric-depth-sigma">Depth blur sigma <span id="val-fabric-depth-sigma">40</span></label>
+                      <input type="range" id="range-fabric-depth-sigma" min="5" max="100" value="40">
+                    </div>
+                    <div class="align-control">
+                      <label for="range-fabric-feather">Feather <span id="val-fabric-feather">6</span>px</label>
+                      <input type="range" id="range-fabric-feather" min="0" max="20" value="6">
+                    </div>
+                    <div class="align-control">
+                      <label for="range-fabric-outline">Outline <span id="val-fabric-outline">1</span>px</label>
+                      <input type="range" id="range-fabric-outline" min="0" max="5" value="1">
+                    </div>
+                  </div>
+                </details>
+
+                <input type="hidden" id="select-fabric-far-stencil" value="">
+                <button type="button" class="action-btn accent" id="btn-fabric-generate" style="width: 100%; padding: 0.5rem 0; font-size: 0.8rem; border-radius: 6px;">Generate Fabric Asset</button>
+
+                <div id="fabric-pipeline-status" class="status-box stencil-status" style="display: none; margin-top: 0.5rem;"></div>
+
+                <div id="fabric-pipeline-result" style="display: none; margin-top: 0.6rem;">
+                  <div style="font-size: 0.68rem; color: var(--text-secondary); margin-bottom: 0.3rem;">Result</div>
+                  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;" id="fabric-result-previews"></div>
+                  <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                    <button type="button" class="cleanup-tool-btn" id="btn-fabric-download-composite">Download Composite</button>
+                    <button type="button" class="cleanup-tool-btn" id="btn-fabric-download-manifest">Download Manifest</button>
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <!-- Digital Tailor — Create From Mask -->
+            <details class="control-group" id="details-tailor" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+              <summary style="cursor: pointer; font-size: 0.82rem; font-weight: 600; color: var(--text-primary); user-select: none;">
+                <span>Digital Tailor — Create From Mask</span>
+              </summary>
+              <div style="margin-top: 0.8rem; display: flex; flex-direction: column; gap: 0.5rem;">
+
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                  <label style="font-size: 0.72rem; color: var(--text-secondary); min-width: 60px;">Recipe</label>
+                  <select id="select-tailor-recipe" style="flex: 1; font-size: 0.75rem; padding: 0.25rem 0.4rem; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border-glass); border-radius: 4px;">
+                    <option value="bodice">Bodice</option>
+                    <option value="tight_top">Tight Top</option>
+                    <option value="tight_dress">Tight Dress</option>
+                    <option value="leggings">Leggings</option>
+                    <option value="stockings">Stockings</option>
+                    <option value="gloves">Gloves</option>
+                    <option value="bodycon_dress">Bodycon Dress</option>
+                    <option value="simple_flared_dress">Simple Flared Dress</option>
+                  </select>
+                </div>
+
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                  <label style="font-size: 0.72rem; color: var(--text-secondary); min-width: 60px;">Color</label>
+                  <input type="color" id="input-tailor-color" value="#ffffff" style="width: 2rem; height: 1.6rem; padding: 0; border: 1px solid var(--border-glass); border-radius: 4px; background: none; cursor: pointer;">
+                </div>
+
+                <details style="font-size: 0.72rem; color: var(--text-secondary);">
+                  <summary style="cursor: pointer; user-select: none;">Texture upload (optional)</summary>
+                  <input type="file" id="input-tailor-texture" accept="image/*" style="margin-top: 0.3rem; font-size: 0.72rem;">
+                </details>
+
+                <div class="cleanup-control-grid" style="margin-top: 0.3rem;">
+                  <label class="align-control">Expand X <span id="val-tailor-expand-x">0</span>px
+                    <input type="range" id="range-tailor-expand-x" min="0" max="40" value="0">
+                  </label>
+                  <label class="align-control">Expand Y <span id="val-tailor-expand-y">0</span>px
+                    <input type="range" id="range-tailor-expand-y" min="0" max="40" value="0">
+                  </label>
+                  <label class="align-control">Dilate <span id="val-tailor-dilate">0</span>px
+                    <input type="range" id="range-tailor-dilate" min="0" max="20" value="0">
+                  </label>
+                  <label class="align-control">Erode <span id="val-tailor-erode">0</span>px
+                    <input type="range" id="range-tailor-erode" min="0" max="20" value="0">
+                  </label>
+                  <label class="align-control">Smooth <span id="val-tailor-smooth">2</span>px
+                    <input type="range" id="range-tailor-smooth" min="0" max="12" value="2">
+                  </label>
+                  <label class="align-control">Flare <span id="val-tailor-flare">0</span>px
+                    <input type="range" id="range-tailor-flare" min="0" max="60" value="0">
+                  </label>
+                  <label class="align-control">Taper <span id="val-tailor-taper">0</span>px
+                    <input type="range" id="range-tailor-taper" min="0" max="30" value="0">
+                  </label>
+                </div>
+
+                <div style="display: flex; gap: 0.8rem; flex-wrap: wrap; font-size: 0.72rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                  <label style="display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+                    <input type="checkbox" id="chk-tailor-edge-stroke" checked> Edge stroke
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+                    <input type="checkbox" id="chk-tailor-inner-shadow" checked> Inner shadow
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+                    <input type="checkbox" id="chk-tailor-highlight"> Highlight
+                  </label>
+                </div>
+
+                <button type="button" class="action-btn accent" id="btn-tailor-generate" style="width: 100%; padding: 0.5rem 0; font-size: 0.8rem; border-radius: 6px;">Generate</button>
+
+                <div id="tailor-status" class="status-box stencil-status" style="display: none;"></div>
+
+                <div id="tailor-result" style="display: none; margin-top: 0.4rem;">
+                  <img id="tailor-preview-img" width="120" height="120" style="border-radius: 6px; border: 1px solid var(--border-glass); object-fit: contain; background: rgba(255,255,255,0.04);" alt="tailor preview">
+                  <div id="tailor-meta" style="font-size: 0.68rem; color: var(--text-secondary); margin-top: 0.3rem;"></div>
+                  <div style="display: flex; gap: 0.5rem; margin-top: 0.4rem;">
+                    <button type="button" class="cleanup-tool-btn" id="btn-tailor-to-cleanup">Send to Cleanup Workbench</button>
+                    <button type="button" class="cleanup-tool-btn" id="btn-tailor-to-bake">Send to Align/Bake</button>
+                  </div>
+                </div>
+
+              </div>
+            </details>
+          </div>
+
+          <!-- Tab 6: Studio Tools (PSD import, background removal, zip export) -->
           <div class="tab-pane" id="tab-studio">
             <!-- Save / Load Character State -->
             <div class="control-group">

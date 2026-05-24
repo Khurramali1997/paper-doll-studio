@@ -4,3 +4,10 @@ rembg[cpu]>=2.0.0
 jsonschema>=4.20.0
 numpy>=1.24.0
 opencv-python-headless>=4.9.0
+
+# Optional model files (place in models/ to enable):
+#   models/isnet_anime.onnx     ~170 MB  auto-downloaded from HuggingFace skytnt/anime-seg
+#   models/lbpcascade_animeface.xml  ~2.6 MB  auto-downloaded from github.com/nagadomi
+#   models/wd14_moat_tagger.onnx  ~350 MB  manual opt-in from HuggingFace SmilingWolf/wd-v1-4-moat-tagger-v2
+# onnxruntime is already a transitive dependency of rembg[cpu]
+# mediapipe is already used by compiler/pose_estimator.py

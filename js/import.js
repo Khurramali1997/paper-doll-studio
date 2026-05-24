@@ -1843,6 +1843,7 @@ async function loadAndParsePSD(file, targetContainer) {
       buildCalibrateOptions();
       renderDoll(targetContainer);
       updateViewportTransform(document.getElementById('doll-container'));
+      window.dispatchEvent(new CustomEvent('paperdoll:psd-loaded', { detail: { filename: file.name } }));
 
       psdProgressFill.style.width = '100%';
       txtPsdStatus.textContent = `PSD ${file.name} successfully imported!`;
@@ -2440,4 +2441,51 @@ function switchToTab(tabName) {
   document.querySelectorAll('.tab-pane').forEach(p => {
     p.classList.toggle('active', p.id === `tab-${tabName}`);
   });
+}
+
+export async function receiveAssetForCleanup(blob, filename) {
+  clearFitPreview();
+  _invalidateAICache();
+
+  const file = new File([blob], filename, { type: 'image/png' });
+  const url = URL.createObjectURL(blob);
+  const image = await loadImage(url);
+
+  // The tailor generates canvas-sized PNGs — reset alignment so it lands 1:1.
+  const docW = DOLL_CONFIG?.canvas?.width || 768;
+  const docH = DOLL_CONFIG?.canvas?.height || 768;
+  const fit = Math.min(1.0, docW / image.width, docH / image.height);
+  alignSettings.x = 0;
+  alignSettings.y = 0;
+  alignSettings.scaleX = parseFloat(fit.toFixed(4));
+  alignSettings.scaleY = parseFloat(fit.toFixed(4));
+
+  setPendingAsset(file, image);
+  setPendingPreviewImage(null);
+
+  // Populate the ingest name field from the filename.
+  const txtIngestName = document.getElementById('txt-ingest-name');
+  if (txtIngestName) {
+    const baseName = filename.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
+    txtIngestName.value = baseName.replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  // Show the selected file in the drop zone label.
+  const assetDropText = document.getElementById('asset-drop-text');
+  if (assetDropText) {
+    assetDropText.innerHTML = `Selected: <strong>${filename}</strong>`;
+  }
+
+  // Enable the ingest button — it starts disabled in HTML and is only enabled
+  // by handleAssetFileSelect; without this the button stays greyed out.
+  const btnIngestSubmit = document.getElementById('btn-ingest-submit');
+  if (btnIngestSubmit) btnIngestSubmit.removeAttribute('disabled');
+
+  await initCleanupWorkbenchForImage(image);
+
+  if (livePreviewTargetContainer) renderDoll(livePreviewTargetContainer);
+  updateAlignUI();
+  scheduleImportPreview();
+
+  document.querySelector('.tab-link[data-tab="tab-import"]')?.click();
 }

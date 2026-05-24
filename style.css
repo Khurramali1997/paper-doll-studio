@@ -1276,6 +1276,123 @@ select:focus {
   gap: 0.35rem;
 }
 
+.stencil-sandbox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.stencil-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.stencil-actions,
+.stencil-tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.stencil-geometry {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.45rem;
+  align-items: end;
+}
+
+.stencil-geometry .align-control {
+  min-width: 0;
+}
+
+.stencil-geometry input[type="range"] {
+  width: 100%;
+}
+
+.stencil-gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.stencil-gallery-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.35rem;
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+}
+
+.stencil-gallery-item.active {
+  border-color: var(--accent-color);
+}
+
+.stencil-gallery-item canvas {
+  width: 100%;
+  aspect-ratio: 1;
+  display: block;
+  background: #0f1218;
+  border-radius: 4px;
+}
+
+.stencil-gallery-item span {
+  font-size: 0.64rem;
+  color: var(--text-secondary);
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.stencil-tool-row label {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.stencil-tool-row input[type="range"] {
+  flex: 1 1 120px;
+  min-width: 90px;
+}
+
+.stencil-name-row input {
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  font-family: var(--font-main);
+  font-size: 0.72rem;
+}
+
+.stencil-editor-shell {
+  width: 100%;
+  aspect-ratio: 1;
+  max-height: 420px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+#stencil-editor-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+
+.stencil-status {
+  padding: 0.45rem;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
 @media (max-width: 980px) {
   .cleanup-preview-grid {
     grid-template-columns: 1fr;
@@ -1292,6 +1409,20 @@ select:focus {
 
   .cleanup-preview-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .stencil-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stencil-geometry {
+    grid-template-columns: 1fr;
+  }
+
+  .stencil-gallery {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
