@@ -706,6 +706,7 @@ def build_mask_from_recipe(
     transform_overrides: Optional[Dict] = None,
     rig_anchors: Optional[Dict] = None,
     semantic: Optional[Dict] = None,
+    body_silhouette_arr: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, List[str]]:
     """Build garment mask from body_silhouette contour + semantic modifications.
 
@@ -743,9 +744,14 @@ def build_mask_from_recipe(
     ops.append(f"rig:anchors={len(ra)} garment_anchors={len(ga)}")
 
     # 2. Body silhouette IS the authoritative character contour.
-    #    Slice it to the garment's vertical zone using anchor Y positions.
+    #    Caller may supply a live-generated array (from the uploaded PSD);
+    #    fall back to the static file on disk only when none is provided.
     try:
-        body_sil = load_mask("body_silhouette", base_rig_dir)
+        if body_silhouette_arr is not None:
+            body_sil = body_silhouette_arr
+            ops.append("body_sil:from_upload")
+        else:
+            body_sil = load_mask("body_silhouette", base_rig_dir)
 
         if category in ("topwear", "top"):
             top_y    = _pt(ga, "neck", (W // 2, int(H * 0.235)))[1]
@@ -860,6 +866,7 @@ def construct_pattern(
     transform: Dict,
     rig_anchors: Optional[Dict] = None,
     semantic: Optional[Dict] = None,
+    body_silhouette_arr: Optional[np.ndarray] = None,
 ) -> Dict:
     """Full pipeline: recipe → rendered BGRA asset.
 
@@ -891,6 +898,7 @@ def construct_pattern(
         transform_overrides=transform,
         rig_anchors=rig_anchors,
         semantic=semantic,
+        body_silhouette_arr=body_silhouette_arr,
     )
 
     if not mask.any():

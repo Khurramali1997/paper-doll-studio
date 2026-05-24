@@ -987,6 +987,12 @@ async function buildTailorAsset() {
   if (textureFile) fd.append('texture', textureFile);
 
   try {
+    const silCanvas = await generateBodySilhouetteCanvas();
+    const silBlob = await new Promise(resolve => silCanvas.toBlob(resolve, 'image/png'));
+    if (silBlob) fd.append('body_silhouette', silBlob, 'body_silhouette.png');
+  } catch { /* no PSD loaded — server falls back to static mask */ }
+
+  try {
     const res = await fetch('/api/construct-pattern', { method: 'POST', body: fd });
     const data = await res.json();
     if (!data.success) { setStatus(data.detail || 'Generation failed', true); return; }

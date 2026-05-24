@@ -471,6 +471,7 @@ async def construct_pattern_endpoint(
     recipe: str = Form(...),
     color: str = Form("#ffffff"),
     texture: Optional[UploadFile] = File(None),
+    body_silhouette: Optional[UploadFile] = File(None),
     expand_x: int = Form(0),
     expand_y: int = Form(0),
     dilate_px: int = Form(0),
@@ -492,6 +493,19 @@ async def construct_pattern_endpoint(
         raw = await texture.read()
         arr = np.frombuffer(raw, np.uint8)
         texture_arr = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+
+    body_silhouette_arr = None
+    if body_silhouette and body_silhouette.filename:
+        raw = await body_silhouette.read()
+        arr = np.frombuffer(raw, np.uint8)
+        decoded = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+        if decoded is not None:
+            # Convert to binary mask: any non-transparent pixel → 255
+            if decoded.ndim == 3 and decoded.shape[2] == 4:
+                body_silhouette_arr = np.where(decoded[:, :, 3] > 10, np.uint8(255), np.uint8(0))
+            else:
+                gray = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY) if decoded.ndim == 3 else decoded
+                body_silhouette_arr = np.where(gray > 10, np.uint8(255), np.uint8(0))
 
     rig_anchors = None
     rig_path = os.path.join(BASE_RIG_DIR, "rig.json")
@@ -524,6 +538,7 @@ async def construct_pattern_endpoint(
             recipe, BASE_RIG_DIR,
             material=material, effects=effects, transform=transform,
             rig_anchors=rig_anchors, semantic=semantic,
+            body_silhouette_arr=body_silhouette_arr,
         )
     except Exception as e:
         raise HTTPException(500, f"Pattern construction failed: {e}")
