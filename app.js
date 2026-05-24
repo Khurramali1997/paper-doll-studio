@@ -134,11 +134,7 @@ function wireDesignOps(targetContainer) {
       updateActiveOptionButton(slot, config.defaultValue);
     });
 
-    if (DOLL_CONFIG.wardrobe.handwear) {
-      state.wardrobeDepth['handwear'] = 'front_body';
-      const el = document.getElementById('select-handwear-depth');
-      if (el) el.value = 'front_body';
-    }
+    state.wardrobeDepth = {};
 
     Object.keys(state.toggles).forEach(k => {
       state.toggles[k] = true;

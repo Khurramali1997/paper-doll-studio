@@ -169,11 +169,6 @@ function computeZForLayer(layer) {
       finalZ = isClothing ? 15 : 14;
     } else if (isLeft) {
       finalZ = isClothing ? 260 : 259;
-    } else if (state.wardrobeDepth['handwear']) {
-      const depth = state.wardrobeDepth['handwear'];
-      if (depth === 'behind') finalZ = isClothing ? 15 : 14;
-      else if (depth === 'front_body') finalZ = isClothing ? 165 : 164;
-      else if (depth === 'front_clothes') finalZ = isClothing ? 260 : 259;
     }
   }
   const controls = state.layerControls[layer.id];
@@ -241,12 +236,6 @@ export function getBaseLayers() {
       const isLeft = isHandwearLeft(l.id, l.name);
       if (isRight) finalZ = isClothing ? 15 : 14;
       else if (isLeft) finalZ = isClothing ? 260 : 259;
-      else if (state.wardrobeDepth['handwear']) {
-        const depth = state.wardrobeDepth['handwear'];
-        if (depth === 'behind') finalZ = isClothing ? 15 : 14;
-        else if (depth === 'front_body') finalZ = isClothing ? 165 : 164;
-        else if (depth === 'front_clothes') finalZ = isClothing ? 260 : 259;
-      }
     }
     return { ...l, computedZ: finalZ };
   }).sort((a, b) => a.computedZ - b.computedZ);

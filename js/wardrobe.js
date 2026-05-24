@@ -94,48 +94,8 @@ export function buildUI(targetContainer) {
   wardrobeGroup.appendChild(slotList);
   wardrobeContainer.appendChild(wardrobeGroup);
 
-  // Depth overrides (handwear only for now)
   const depthContainer = document.getElementById('depth-controls-container');
-  depthContainer.innerHTML = '';
-  if (DOLL_CONFIG.wardrobe.handwear) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'select-wrapper';
-    wrapper.style.cssText = 'margin-top: 0.8rem';
-
-    const label = document.createElement('label');
-    label.htmlFor = 'select-handwear-depth';
-    label.style.cssText = 'font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;';
-    label.textContent = 'Drawing Order (Depth):';
-    wrapper.appendChild(label);
-
-    const select = document.createElement('select');
-    select.id = 'select-handwear-depth';
-    select.style.cssText = 'width: 100%; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); outline: none; font-size: 0.8rem;';
-
-    const opts = [
-      { value: 'behind', text: 'Behind Body (Z-Index: 15)' },
-      { value: 'front_body', text: 'In Front of Body, Behind Clothes (Z-Index: 165)' },
-      { value: 'front_clothes', text: 'On Top of Clothes (Z-Index: 260)' }
-    ];
-    opts.forEach(o => {
-      const optEl = document.createElement('option');
-      optEl.value = o.value;
-      optEl.textContent = o.text;
-      if (o.value === (state.wardrobeDepth['handwear'] || 'front_body')) optEl.selected = true;
-      select.appendChild(optEl);
-    });
-
-    select.addEventListener('change', (e) => {
-      pushHistory();
-      state.wardrobeDepth['handwear'] = e.target.value;
-      renderWardrobeLayerStack(targetContainer);
-      renderDoll(targetContainer);
-    });
-    if (!state.wardrobeDepth['handwear']) state.wardrobeDepth['handwear'] = 'front_body';
-
-    wrapper.appendChild(select);
-    depthContainer.appendChild(wrapper);
-  }
+  if (depthContainer) depthContainer.innerHTML = '';
 
   renderWardrobeLayerStack(targetContainer);
 
@@ -347,9 +307,16 @@ function baseComputedZ(layer) {
   return (layer.computedZ ?? layer.z ?? 0) - (state.layerControls[layer.id]?.zOffset || 0);
 }
 
+function isLayerInActiveWardrobeOption(layer) {
+  if (layer.category !== 'wardrobe') return true;
+  const slotConfig = DOLL_CONFIG.wardrobe[layer.subcategory];
+  const selected = slotConfig?.options.find(o => o.value === state.wardrobe[layer.subcategory]);
+  return !!selected?.layers.includes(layer.id);
+}
+
 function reorderWardrobeLayer(draggedId, targetId, targetContainer) {
   if (!draggedId || !targetId || draggedId === targetId) return;
-  const rows = activeWardrobeLayersForStack();
+  const rows = layerManagerRows();
   const from = rows.findIndex(layer => layer.id === draggedId);
   const to = rows.findIndex(layer => layer.id === targetId);
   if (from < 0 || to < 0) return;
@@ -368,194 +335,268 @@ function reorderWardrobeLayer(draggedId, targetId, targetContainer) {
   renderDoll(targetContainer);
 }
 
-function activeWardrobeLayersForStack() {
-  const activeIds = new Set(getActiveLayers().filter(l => l.category === 'wardrobe').map(l => l.id));
-  const hiddenActive = DOLL_CONFIG.layers.filter(layer => {
-    if (layer.category !== 'wardrobe') return false;
-    if (state.layerControls[layer.id]?.visible !== false) return false;
-    const slotConfig = DOLL_CONFIG.wardrobe[layer.subcategory];
-    const selected = slotConfig?.options.find(o => o.value === state.wardrobe[layer.subcategory]);
-    return selected?.layers.includes(layer.id);
-  });
-  const visibleActive = getActiveLayers().filter(l => l.category === 'wardrobe');
-  hiddenActive.forEach(layer => {
-    if (!activeIds.has(layer.id)) {
-      visibleActive.push({
-        ...layer,
-        name: state.layerControls[layer.id]?.customName || layer.name,
-        computedZ: layer.z + (state.layerControls[layer.id]?.zOffset || 0),
-        opacity: state.layerControls[layer.id]?.opacity ?? 100,
-      });
+function layerManagerRows() {
+  const activeIds = new Set(getActiveLayers().map(l => l.id));
+  return DOLL_CONFIG.layers.map(layer => {
+    const controls = state.layerControls[layer.id] || {};
+    return {
+      ...layer,
+      name: controls.customName || layer.name,
+      computedZ: layer.z + (controls.zOffset || 0),
+      opacity: controls.opacity ?? 100,
+      isActiveLayer: activeIds.has(layer.id),
+    };
+  }).sort((a, b) => b.computedZ - a.computedZ);
+}
+
+let selectedLayerManagerId = null;
+
+function uniqueLayerId(baseId) {
+  let idx = 1;
+  let id = `${baseId}_copy`;
+  const ids = new Set(DOLL_CONFIG.layers.map(layer => layer.id));
+  while (ids.has(id)) {
+    idx++;
+    id = `${baseId}_copy_${idx}`;
+  }
+  return id;
+}
+
+function duplicateLayer(layer, targetContainer) {
+  const source = DOLL_CONFIG.layers.find(l => l.id === layer.id);
+  if (!source) return;
+  pushHistory();
+  const copyId = uniqueLayerId(source.id);
+  const copyName = `${displayLayerName(source)} Copy`;
+  const clone = {
+    ...source,
+    id: copyId,
+    name: copyName,
+    z: (source.z || 0) + 1,
+  };
+  DOLL_CONFIG.layers.push(clone);
+  state.layerControls[copyId] = {
+    visible: true,
+    opacity: state.layerControls[source.id]?.opacity ?? 100,
+    zOffset: state.layerControls[source.id]?.zOffset || 0,
+    customName: copyName,
+  };
+
+  if (source.category === 'wardrobe') {
+    const slotConfig = DOLL_CONFIG.wardrobe[source.subcategory];
+    const option = slotConfig?.options.find(o => o.value === state.wardrobe[source.subcategory])
+      || slotConfig?.options.find(o => o.layers.includes(source.id));
+    if (option && !option.layers.includes(copyId)) {
+      const sourceIdx = option.layers.indexOf(source.id);
+      option.layers.splice(sourceIdx >= 0 ? sourceIdx + 1 : option.layers.length, 0, copyId);
     }
+  }
+
+  renderWardrobeLayerStack(targetContainer);
+  renderDoll(targetContainer);
+}
+
+function deleteLayer(layer, targetContainer) {
+  const source = DOLL_CONFIG.layers.find(l => l.id === layer.id);
+  if (!source) return;
+  const ok = window.confirm(`Delete layer "${displayLayerName(source)}" from the current project config?`);
+  if (!ok) return;
+  pushHistory();
+  DOLL_CONFIG.layers = DOLL_CONFIG.layers.filter(l => l.id !== source.id);
+  delete state.layerControls[source.id];
+  Object.values(DOLL_CONFIG.wardrobe).forEach(slotConfig => {
+    slotConfig.options.forEach(option => {
+      option.layers = option.layers.filter(id => id !== source.id);
+    });
   });
-  return visibleActive.sort((a, b) => b.computedZ - a.computedZ);
+  renderWardrobeLayerStack(targetContainer);
+  renderDoll(targetContainer);
 }
 
 function renderWardrobeLayerStack(targetContainer) {
-  const depthContainer = document.getElementById('depth-controls-container');
-  if (!depthContainer) return;
+  const layerContainer = document.getElementById('layer-manager-container') || document.getElementById('depth-controls-container');
+  if (!layerContainer) return;
 
   let panel = document.getElementById('wardrobe-layer-stack-panel');
   if (!panel) {
     panel = document.createElement('div');
     panel.id = 'wardrobe-layer-stack-panel';
-    panel.className = 'control-group wardrobe-layer-stack';
-    depthContainer.appendChild(panel);
+    panel.className = 'control-group wardrobe-layer-stack layer-manager-editor';
+    layerContainer.appendChild(panel);
   }
 
   panel.textContent = '';
   const title = document.createElement('h3');
-  title.textContent = 'Wardrobe Layer Stack';
+  title.textContent = 'Layer Manager';
   panel.appendChild(title);
 
-  const rows = activeWardrobeLayersForStack();
+  const rows = layerManagerRows();
   if (rows.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'group-desc';
-    empty.textContent = 'No wardrobe layers are currently active.';
+    empty.textContent = 'No layers are currently active.';
     panel.appendChild(empty);
     return;
   }
 
-  const list = document.createElement('div');
-  list.className = 'wardrobe-layer-list';
+  if (!selectedLayerManagerId || !rows.some(layer => layer.id === selectedLayerManagerId)) {
+    selectedLayerManagerId = rows[0].id;
+  }
 
+  const selectWrap = document.createElement('div');
+  selectWrap.className = 'align-control layer-manager-select-wrap';
+  const selectLabel = document.createElement('label');
+  selectLabel.htmlFor = 'select-layer-manager-layer';
+  selectLabel.textContent = 'Layer';
+  const select = document.createElement('select');
+  select.id = 'select-layer-manager-layer';
   rows.forEach(layer => {
-    const controls = ensureLayerControls(layer.id);
-    const row = document.createElement('div');
-    row.className = `wardrobe-layer-row${controls.visible === false ? ' muted' : ''}`;
-    row.draggable = true;
-    row.dataset.layerId = layer.id;
-    row.addEventListener('dragstart', (e) => {
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', layer.id);
-      row.classList.add('dragging');
-    });
-    row.addEventListener('dragend', () => {
-      row.classList.remove('dragging');
-      document.querySelectorAll('.wardrobe-layer-row.drop-target').forEach(el => el.classList.remove('drop-target'));
-    });
-    row.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      row.classList.add('drop-target');
-    });
-    row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
-    row.addEventListener('drop', (e) => {
-      e.preventDefault();
-      row.classList.remove('drop-target');
-      reorderWardrobeLayer(e.dataTransfer.getData('text/plain'), layer.id, targetContainer);
-    });
+    const opt = document.createElement('option');
+    opt.value = layer.id;
+    opt.textContent = `${layer.isActiveLayer ? '●' : '○'} ${displayLayerName(layer)} · z ${layer.computedZ}`;
+    if (layer.id === selectedLayerManagerId) opt.selected = true;
+    select.appendChild(opt);
+  });
+  select.addEventListener('change', () => {
+    selectedLayerManagerId = select.value;
+    renderWardrobeLayerStack(targetContainer);
+  });
+  selectWrap.appendChild(selectLabel);
+  selectWrap.appendChild(select);
+  panel.appendChild(selectWrap);
 
-    const visibility = document.createElement('button');
-    visibility.type = 'button';
-    visibility.className = 'layer-icon-btn';
-    visibility.title = controls.visible === false ? 'Show layer' : 'Hide layer';
-    visibility.textContent = controls.visible === false ? 'Show' : 'Hide';
-    visibility.addEventListener('click', () => {
+  const layer = rows.find(row => row.id === selectedLayerManagerId) || rows[0];
+  const controls = ensureLayerControls(layer.id);
+  const source = DOLL_CONFIG.layers.find(l => l.id === layer.id) || layer;
+  const layerKind = layer.category === 'wardrobe' ? slotLabel(layer.subcategory) : `${layer.category || 'layer'} / ${layer.subcategory || 'base'}`;
+
+  const editor = document.createElement('div');
+  editor.className = 'layer-manager-fields';
+
+  const visible = document.createElement('label');
+  visible.className = 'switch-item layer-manager-visible';
+  const visibleText = document.createElement('span');
+  visibleText.className = 'switch-label';
+  visibleText.textContent = 'Visible';
+  const visibleInput = document.createElement('input');
+  visibleInput.type = 'checkbox';
+  visibleInput.checked = controls.visible !== false;
+  visibleInput.addEventListener('change', () => {
+    pushHistory();
+    controls.visible = visibleInput.checked;
+    renderWardrobeLayerStack(targetContainer);
+    renderDoll(targetContainer);
+  });
+  const visibleSlider = document.createElement('span');
+  visibleSlider.className = 'slider';
+  visible.appendChild(visibleText);
+  visible.appendChild(visibleInput);
+  visible.appendChild(visibleSlider);
+  editor.appendChild(visible);
+
+  const nameWrap = document.createElement('div');
+  nameWrap.className = 'align-control';
+  const nameLabel = document.createElement('label');
+  nameLabel.textContent = 'Name';
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.value = displayLayerName(layer);
+  nameInput.addEventListener('change', () => {
+    const nextName = nameInput.value.trim();
+    if (!nextName) {
+      nameInput.value = displayLayerName(layer);
+      return;
+    }
+    pushHistory();
+    source.name = nextName;
+    controls.customName = nextName;
+    renderWardrobeLayerStack(targetContainer);
+    renderDoll(targetContainer);
+  });
+  nameWrap.appendChild(nameLabel);
+  nameWrap.appendChild(nameInput);
+  editor.appendChild(nameWrap);
+
+  const zWrap = document.createElement('div');
+  zWrap.className = 'align-control';
+  const zLabel = document.createElement('label');
+  zLabel.textContent = 'Z index';
+  const zInput = document.createElement('input');
+  zInput.type = 'number';
+  zInput.value = String(layer.computedZ);
+  zInput.addEventListener('change', () => {
+    const nextZ = parseInt(zInput.value, 10);
+    if (!Number.isFinite(nextZ)) {
+      zInput.value = String(layer.computedZ);
+      return;
+    }
+    pushHistory();
+    controls.zOffset = Math.max(-9999, Math.min(9999, nextZ - baseComputedZ(layer)));
+    renderWardrobeLayerStack(targetContainer);
+    renderDoll(targetContainer);
+  });
+  zWrap.appendChild(zLabel);
+  zWrap.appendChild(zInput);
+  editor.appendChild(zWrap);
+
+  const opacityWrap = document.createElement('div');
+  opacityWrap.className = 'align-control';
+  const opacityLabel = document.createElement('label');
+  opacityLabel.textContent = `Opacity ${controls.opacity}%`;
+  const opacity = document.createElement('input');
+  opacity.type = 'range';
+  opacity.min = '0';
+  opacity.max = '100';
+  opacity.step = '5';
+  opacity.value = String(controls.opacity);
+  opacity.addEventListener('input', () => {
+    if (opacity.dataset.dirty !== 'true') {
       pushHistory();
-      controls.visible = controls.visible === false;
-      renderWardrobeLayerStack(targetContainer);
-      renderDoll(targetContainer);
-    });
-    row.appendChild(visibility);
+      opacity.dataset.dirty = 'true';
+    }
+    controls.opacity = parseInt(opacity.value, 10);
+    opacityLabel.textContent = `Opacity ${controls.opacity}%`;
+    renderDoll(targetContainer);
+  });
+  opacity.addEventListener('change', () => {
+    opacity.dataset.dirty = 'false';
+    renderWardrobeLayerStack(targetContainer);
+  });
+  opacityWrap.appendChild(opacityLabel);
+  opacityWrap.appendChild(opacity);
+  editor.appendChild(opacityWrap);
 
-    const meta = document.createElement('div');
-    meta.className = 'wardrobe-layer-meta';
-    const name = document.createElement('input');
-    name.className = 'wardrobe-layer-name-input';
-    name.value = displayLayerName(layer);
-    name.title = 'Layer display name';
-    name.addEventListener('dragstart', e => e.preventDefault());
-    name.addEventListener('keydown', e => {
-      if (e.key === 'Enter') name.blur();
-    });
-    name.addEventListener('focus', () => {
-      name.dataset.originalValue = displayLayerName(layer);
-    });
-    name.addEventListener('change', () => {
-      const nextName = name.value.trim();
-      const prevName = name.dataset.originalValue || displayLayerName(layer);
-      if (!nextName) {
-        name.value = prevName;
-        return;
-      }
-      if (nextName === prevName) return;
-      pushHistory();
-      controls.customName = nextName;
-      renderWardrobeLayerStack(targetContainer);
-      renderDoll(targetContainer);
-    });
-    const sub = document.createElement('span');
-    sub.className = 'wardrobe-layer-sub';
-    sub.textContent = `${slotLabel(layer.subcategory)} · z ${layer.computedZ}`;
-    meta.appendChild(name);
-    meta.appendChild(sub);
-    row.appendChild(meta);
+  const meta = document.createElement('div');
+  meta.className = 'layer-manager-meta';
+  meta.textContent = `${layer.isActiveLayer ? 'active' : 'inactive'} · ${layerKind} · id ${layer.id} · base z ${baseComputedZ(layer)} · file ${layer.file || 'none'}`;
+  editor.appendChild(meta);
 
-    const order = document.createElement('div');
-    order.className = 'wardrobe-layer-order';
-    [
-      { label: 'Back', delta: -5 },
-      { label: 'Front', delta: 5 },
-    ].forEach(({ label, delta }) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'layer-order-btn';
-      btn.textContent = label;
-      btn.addEventListener('click', () => {
-        pushHistory();
-        controls.zOffset = Math.max(-80, Math.min(80, (controls.zOffset || 0) + delta));
+  const actions = document.createElement('div');
+  actions.className = 'layer-manager-actions';
+  [
+    { label: 'Back -5', fn: () => { controls.zOffset = Math.max(-9999, Math.min(9999, (controls.zOffset || 0) - 5)); } },
+    { label: 'Front +5', fn: () => { controls.zOffset = Math.max(-9999, Math.min(9999, (controls.zOffset || 0) + 5)); } },
+    { label: 'Duplicate', fn: () => duplicateLayer(layer, targetContainer), skipRender: true },
+    { label: 'Delete', fn: () => deleteLayer(layer, targetContainer), danger: true, skipRender: true },
+    { label: 'Reset', fn: () => { state.layerControls[layer.id] = { visible: true, opacity: 100, zOffset: 0 }; } },
+  ].forEach(action => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = action.danger ? 'layer-delete-btn' : 'layer-reset-btn';
+    btn.textContent = action.label;
+    btn.addEventListener('click', () => {
+      if (!action.skipRender) pushHistory();
+      action.fn();
+      if (!action.skipRender) {
         renderWardrobeLayerStack(targetContainer);
         renderDoll(targetContainer);
-      });
-      order.appendChild(btn);
-    });
-    row.appendChild(order);
-
-    const opacityWrap = document.createElement('label');
-    opacityWrap.className = 'wardrobe-opacity-control';
-    const opacityText = document.createElement('span');
-    opacityText.textContent = `${controls.opacity}%`;
-    const opacity = document.createElement('input');
-    opacity.type = 'range';
-    opacity.min = '0';
-    opacity.max = '100';
-    opacity.step = '5';
-    opacity.value = String(controls.opacity);
-    opacity.addEventListener('input', (e) => {
-      if (opacity.dataset.dirty !== 'true') {
-        pushHistory();
-        opacity.dataset.dirty = 'true';
       }
-      controls.opacity = parseInt(e.target.value, 10);
-      opacityText.textContent = `${controls.opacity}%`;
-      renderDoll(targetContainer);
     });
-    opacity.addEventListener('change', () => {
-      opacity.dataset.dirty = 'false';
-      renderWardrobeLayerStack(targetContainer);
-      renderDoll(targetContainer);
-    });
-    opacityWrap.appendChild(opacityText);
-    opacityWrap.appendChild(opacity);
-    row.appendChild(opacityWrap);
-
-    const reset = document.createElement('button');
-    reset.type = 'button';
-    reset.className = 'layer-reset-btn';
-    reset.textContent = 'Reset';
-    reset.addEventListener('click', () => {
-      pushHistory();
-      state.layerControls[layer.id] = { visible: true, opacity: 100, zOffset: 0 };
-      renderWardrobeLayerStack(targetContainer);
-      renderDoll(targetContainer);
-    });
-    row.appendChild(reset);
-
-    list.appendChild(row);
+    actions.appendChild(btn);
   });
+  editor.appendChild(actions);
 
-  panel.appendChild(list);
+  panel.appendChild(editor);
 }
 
 function createSliderBlock(title, id, min, max, val, suffix, onChange) {

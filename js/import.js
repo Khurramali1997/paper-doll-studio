@@ -1,7 +1,7 @@
 import { state, DOLL_CONFIG, TOGGLE_GROUPS, pushHistory } from './state.js';
 import {
   renderDoll, pendingAssetFile, pendingAssetImage, pendingPreviewImage, pendingPreviewIsBaked,
-  setPendingAsset, setPendingPreviewImage, clearImageCache, cacheImage, alignSettings,
+  setPendingAsset, setPendingPreviewImage, clearImageCache, cacheImage, localImageCache, alignSettings,
   generateDynamicBodyReferenceCanvas, updateDollCursor, updateViewportTransform
 } from './render.js';
 import {
@@ -21,7 +21,10 @@ import {
   parseHexColor,
   countVisibleMaskOverlap,
   applyMaskProposal,
+  buildBodyStencil,
   buildCleanupMetadata,
+  applyStencilClip,
+  computeOutsideStencilRatio,
 } from './cleanup.js';
 import { clearFitPreview } from './fit_preview.js';
 import { buildUI, updateActiveOptionButton } from './wardrobe.js';
@@ -40,6 +43,11 @@ const cleanupState = {
   manualEdits: 0,
   operations: [],
   mlAssist: null,
+  stencilImageData: null,
+  stencilDocImageData: null,
+  stencilSettings: null,
+  stencilOutsideRatio: null,
+  stencilStatus: '',
   proposalImageData: null,
   proposalStats: null,
   previewFocus: 'cleaned',
@@ -47,6 +55,8 @@ const cleanupState = {
   brushDown: false,
   brushTool: 'erase',
   activeMaskCache: {},
+  customStencils: [],
+  selectedCustomStencilId: null,
 };
 
 // ===== AI Isolation cache + live preview =====
@@ -60,6 +70,7 @@ let livePreviewDirty = false;
 
 const MIN_AI_ALPHA_COVERAGE = 0.002;
 const MIN_AI_OPAQUE_PIXELS = 128;
+const LOOSE_STENCIL_CATEGORIES = new Set(['outerwear', 'skirt', 'accessory']);
 
 function _sourceKey() {
   const f = pendingAssetFile;
@@ -239,16 +250,37 @@ async function applyBodySubtractionToCanvas(canvas) {
 }
 
 function cleanupHasEdits() {
-  return cleanupState.operations.length > 0 || cleanupState.manualEdits > 0 || !!cleanupState.mlAssist;
+  const stencilEditsPixels = cleanupState.stencilSettings?.enabled && cleanupState.stencilSettings.mode !== 'preview_only';
+  return cleanupState.operations.length > 0 || cleanupState.manualEdits > 0 || !!cleanupState.mlAssist || !!stencilEditsPixels;
+}
+
+function getCleanupStencilSettings() {
+  const c = cleanupControls();
+  return {
+    enabled: !!c.bodyStencil?.checked,
+    source: c.stencilSource?.value || 'body_silhouette',
+    project_layer_id: c.stencilLayerSelect?.value || null,
+    project_layer_name: DOLL_CONFIG.layers.find(layer => layer.id === c.stencilLayerSelect?.value)?.name || null,
+    custom_stencil_id: c.customStencilSelect?.value || cleanupState.selectedCustomStencilId || null,
+    custom_stencil_name: cleanupState.customStencils.find(s => s.id === (c.customStencilSelect?.value || cleanupState.selectedCustomStencilId))?.name || null,
+    mode: c.stencilMode?.value || 'preview_only',
+    expand_px: parseInt(c.stencilExpand?.value || '0', 10),
+    feather_px: parseInt(c.stencilFeather?.value || '0', 10),
+    use_allowed_region: !!c.stencilAllowed?.checked,
+    subtract_forbidden_regions: !!c.stencilForbidden?.checked,
+    preserve_small_details: !!c.stencilPreserveDetails?.checked,
+  };
 }
 
 function getCleanupMetadata() {
   if (!cleanupState.initialized) return null;
+  const stencil = cleanupState.stencilSettings || getCleanupStencilSettings();
   return buildCleanupMetadata({
     sourceLane: cleanupState.sourceLane,
     operations: [...cleanupState.operations],
     manualEdits: cleanupState.manualEdits,
     mlAssist: cleanupState.mlAssist,
+    stencil,
   });
 }
 
@@ -277,6 +309,29 @@ function cleanupControls() {
     bodySubtract: document.getElementById('chk-cleanup-body-subtract'),
     allowedOverlay: document.getElementById('chk-cleanup-allowed-overlay'),
     forbiddenOverlay: document.getElementById('chk-cleanup-forbidden-overlay'),
+    bodyStencil: document.getElementById('chk-cleanup-body-stencil'),
+    stencilSource: document.getElementById('select-cleanup-stencil-source'),
+    stencilLayerSelect: document.getElementById('select-cleanup-stencil-layer'),
+    customStencilSelect: document.getElementById('select-cleanup-custom-stencil'),
+    customStencilName: document.getElementById('txt-cleanup-stencil-name'),
+    customStencilUpload: document.getElementById('btn-cleanup-stencil-upload'),
+    customStencilCapture: document.getElementById('btn-cleanup-stencil-capture'),
+    customStencilBuildMask: document.getElementById('btn-cleanup-stencil-build-mask'),
+    customStencilRename: document.getElementById('btn-cleanup-stencil-rename'),
+    customStencilDelete: document.getElementById('btn-cleanup-stencil-delete'),
+    customStencilInput: document.getElementById('input-cleanup-stencil-upload'),
+    stencilBaseMask: document.getElementById('select-cleanup-stencil-base-mask'),
+    stencilIntersectMask: document.getElementById('select-cleanup-stencil-intersect-mask'),
+    stencilMode: document.getElementById('select-cleanup-stencil-mode'),
+    stencilExpand: document.getElementById('range-cleanup-stencil-expand'),
+    stencilFeather: document.getElementById('range-cleanup-stencil-feather'),
+    stencilAllowed: document.getElementById('chk-cleanup-stencil-allowed'),
+    stencilForbidden: document.getElementById('chk-cleanup-stencil-forbidden'),
+    stencilPreserveDetails: document.getElementById('chk-cleanup-stencil-preserve-details'),
+    stencilOverlayCanvas: document.getElementById('cleanup-stencil-overlay-canvas'),
+    stencilPreviewCanvas: document.getElementById('cleanup-stencil-preview-canvas'),
+    stencilStatus: document.getElementById('cleanup-stencil-status'),
+    editStack: document.getElementById('cleanup-edit-stack'),
     laneCAssist: document.getElementById('cleanup-lane-c-assist'),
     laneCGenerate: document.getElementById('btn-cleanup-lane-c-generate'),
     laneCApply: document.getElementById('btn-cleanup-lane-c-apply'),
@@ -306,12 +361,16 @@ function syncCleanupControlLabels() {
   const brush = document.getElementById('val-cleanup-brush');
   const zoom = document.getElementById('val-cleanup-zoom');
   const laneCStyle = document.getElementById('val-cleanup-lane-c-style');
+  const stencilExpand = document.getElementById('val-cleanup-stencil-expand');
+  const stencilFeather = document.getElementById('val-cleanup-stencil-feather');
   if (keyTol && c.keyTol) keyTol.textContent = c.keyTol.value;
   if (alpha && c.alpha) alpha.textContent = c.alpha.value;
   if (island && c.islandSize) island.textContent = c.islandSize.value;
   if (brush && c.brush) brush.textContent = c.brush.value;
   if (zoom && c.zoom) zoom.textContent = c.zoom.value;
   if (laneCStyle && c.laneCStyle) laneCStyle.textContent = c.laneCStyle.value;
+  if (stencilExpand && c.stencilExpand) stencilExpand.textContent = c.stencilExpand.value;
+  if (stencilFeather && c.stencilFeather) stencilFeather.textContent = c.stencilFeather.value;
 }
 
 function syncLaneCAssistVisibility() {
@@ -341,11 +400,23 @@ function cycleCleanupPreviewFocus() {
 
 function applyCleanupZoom() {
   const canvas = document.getElementById('cleanup-candidate-canvas');
+  const overlay = document.getElementById('cleanup-stencil-overlay-canvas');
+  const stack = document.getElementById('cleanup-edit-stack');
   const zoom = cleanupControls().zoom;
   if (!canvas || !zoom) return;
   const scale = parseInt(zoom.value || '100', 10) / 100;
-  canvas.style.width = `${Math.max(1, Math.round(canvas.width * scale))}px`;
-  canvas.style.height = `${Math.max(1, Math.round(canvas.height * scale))}px`;
+  const width = `${Math.max(1, Math.round(canvas.width * scale))}px`;
+  const height = `${Math.max(1, Math.round(canvas.height * scale))}px`;
+  canvas.style.width = width;
+  canvas.style.height = height;
+  if (overlay) {
+    overlay.style.width = width;
+    overlay.style.height = height;
+  }
+  if (stack) {
+    stack.style.width = width;
+    stack.style.height = height;
+  }
   syncCleanupControlLabels();
 }
 
@@ -364,6 +435,7 @@ async function initCleanupWorkbenchForImage(image) {
   const sourceCanvas = document.getElementById('cleanup-source-canvas');
   const candidateCanvas = document.getElementById('cleanup-candidate-canvas');
   const proposalCanvas = document.getElementById('cleanup-proposal-canvas');
+  const stencilOverlayCanvas = document.getElementById('cleanup-stencil-overlay-canvas');
   if (!sourceCanvas || !candidateCanvas) return;
 
   const w = image.naturalWidth || image.width;
@@ -376,6 +448,11 @@ async function initCleanupWorkbenchForImage(image) {
     proposalCanvas.width = w;
     proposalCanvas.height = h;
     proposalCanvas.getContext('2d').clearRect(0, 0, w, h);
+  }
+  if (stencilOverlayCanvas) {
+    stencilOverlayCanvas.width = w;
+    stencilOverlayCanvas.height = h;
+    stencilOverlayCanvas.getContext('2d').clearRect(0, 0, w, h);
   }
   const sourceCtx = sourceCanvas.getContext('2d');
   sourceCtx.clearRect(0, 0, w, h);
@@ -391,6 +468,11 @@ async function initCleanupWorkbenchForImage(image) {
   cleanupState.manualEdits = 0;
   cleanupState.operations = [];
   cleanupState.mlAssist = null;
+  cleanupState.stencilImageData = null;
+  cleanupState.stencilDocImageData = null;
+  cleanupState.stencilSettings = getCleanupStencilSettings();
+  cleanupState.stencilOutsideRatio = null;
+  cleanupState.stencilStatus = '';
   cleanupState.proposalImageData = null;
   cleanupState.proposalStats = null;
   cleanupState.previewFocus = 'cleaned';
@@ -523,6 +605,7 @@ async function applyLaneCProposal() {
     proposal_stats: cleanupState.proposalStats,
   };
   putCanvasImageData(cleanupState.candidateCanvas, cleanupState.candidateImageData);
+  renderCleanupStencilOverlay();
   await setPendingAssetFromCleanup();
   await renderCleanupBodyPreview();
   await updateCleanupWarnings();
@@ -568,11 +651,34 @@ async function applyCleanupFromControls({ preserveManual = true } = {}) {
     img = applyManualMask(img, cleanupState.manualMaskImageData);
   }
 
+  const stencilSettings = getCleanupStencilSettings();
+  cleanupState.stencilSettings = stencilSettings;
+  cleanupState.stencilImageData = null;
+  cleanupState.stencilDocImageData = null;
+  cleanupState.stencilOutsideRatio = null;
+  cleanupState.stencilStatus = '';
+  if (stencilSettings.enabled) {
+    try {
+      const stencil = await buildActiveBodyStencil(stencilSettings);
+      cleanupState.stencilOutsideRatio = computeOutsideStencilRatio(img, stencil);
+      if (stencilSettings.mode !== 'preview_only') {
+        img = applyStencilClip(img, stencil, stencilSettings.mode, {
+          preserve_small_details: stencilSettings.preserve_small_details,
+        });
+        operations.push(stencilSettings.mode === 'strict_clip' ? 'body_stencil_strict_clip' : 'body_stencil_soft_clip');
+      }
+    } catch (err) {
+      console.warn('body stencil cleanup failed:', err);
+      cleanupState.stencilStatus = `Body stencil failed to load: ${err.message || err}`;
+    }
+  }
+
   cleanupState.sourceLane = c.lane?.value || 'transparent_png';
   cleanupState.operations = operations;
   cleanupState.mlAssist = null;
   cleanupState.candidateImageData = img;
   putCanvasImageData(cleanupState.candidateCanvas, img);
+  renderCleanupStencilOverlay();
   syncLaneCAssistVisibility();
   syncWorkbenchBodySubtract();
   await setPendingAssetFromCleanup();
@@ -643,6 +749,304 @@ async function loadMaskCanvas(cacheKey, path, width, height) {
   return canvas;
 }
 
+function imageDataToCanvas(imageData) {
+  const canvas = document.createElement('canvas');
+  canvas.width = imageData.width;
+  canvas.height = imageData.height;
+  canvas.getContext('2d').putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+function cloneCanvasToSize(sourceCanvas, width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d').drawImage(sourceCanvas, 0, 0, width, height);
+  return canvas;
+}
+
+function formatPercent(value) {
+  return `${Math.round(value * 1000) / 10}%`;
+}
+
+function selectedCustomStencil() {
+  const c = cleanupControls();
+  const id = c.customStencilSelect?.value || cleanupState.selectedCustomStencilId;
+  return cleanupState.customStencils.find(stencil => stencil.id === id) || null;
+}
+
+function syncCustomStencilSelect() {
+  const c = cleanupControls();
+  const select = c.customStencilSelect;
+  if (!select) return;
+  const current = cleanupState.selectedCustomStencilId || select.value;
+  select.textContent = '';
+  if (cleanupState.customStencils.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No custom stencils';
+    select.appendChild(opt);
+    return;
+  }
+  cleanupState.customStencils.forEach(stencil => {
+    const opt = document.createElement('option');
+    opt.value = stencil.id;
+    opt.textContent = stencil.name;
+    if (stencil.id === current) opt.selected = true;
+    select.appendChild(opt);
+  });
+  if (!cleanupState.customStencils.some(stencil => stencil.id === cleanupState.selectedCustomStencilId)) {
+    cleanupState.selectedCustomStencilId = cleanupState.customStencils[0].id;
+    select.value = cleanupState.selectedCustomStencilId;
+  }
+  const selected = selectedCustomStencil();
+  if (c.customStencilName && selected) c.customStencilName.value = selected.name;
+}
+
+function syncStencilLayerSelect() {
+  const c = cleanupControls();
+  const select = c.stencilLayerSelect;
+  if (!select || !DOLL_CONFIG?.layers) return;
+  const current = select.value;
+  select.textContent = '';
+  DOLL_CONFIG.layers.forEach(layer => {
+    const opt = document.createElement('option');
+    opt.value = layer.id;
+    const kind = layer.category === 'wardrobe' ? layer.subcategory : (layer.subcategory || layer.category || 'layer');
+    opt.textContent = `${layer.name || layer.id} (${kind})`;
+    if (layer.id === current) opt.selected = true;
+    select.appendChild(opt);
+  });
+}
+
+function addCustomStencil(name, canvas) {
+  const id = `stencil_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  cleanupState.customStencils.push({ id, name: name || 'Custom Stencil', canvas });
+  cleanupState.selectedCustomStencilId = id;
+  syncCustomStencilSelect();
+}
+
+async function projectLayerStencilCanvas(layerId, docW, docH) {
+  const layer = DOLL_CONFIG.layers.find(l => l.id === layerId);
+  if (!layer) throw new Error('No existing layer selected');
+  const src = localImageCache[layer.file] || `public/assets/${layer.file}`;
+  const img = await loadImage(src);
+  const canvas = document.createElement('canvas');
+  canvas.width = docW;
+  canvas.height = docH;
+  let x = 0;
+  let y = 0;
+  if (state.offsets.rig_offset) {
+    x += state.offsets.rig_offset.x;
+    y += state.offsets.rig_offset.y;
+  }
+  if (layer.file?.startsWith?.('clothing_')) {
+    x += state.offsets.clothed_assets?.x || 0;
+    y += state.offsets.clothed_assets?.y || 0;
+  }
+  if (layer.category && state.offsets[layer.category]) {
+    x += state.offsets[layer.category].x;
+    y += state.offsets[layer.category].y;
+  }
+  if (layer.subcategory && state.offsets[layer.subcategory] && layer.subcategory !== layer.category) {
+    x += state.offsets[layer.subcategory].x;
+    y += state.offsets[layer.subcategory].y;
+  }
+  canvas.getContext('2d').drawImage(img, x, y, docW, docH);
+  return canvas;
+}
+
+function maskAssetPath(maskName) {
+  return `base_rig/masks/${maskName}.png`;
+}
+
+async function loadStencilIngredientCanvas(maskName, docW, docH) {
+  if (maskName === 'visible_body_layers') {
+    return generateDynamicBodyReferenceCanvas();
+  }
+  return loadMaskCanvas(`stencil:ingredient:${maskName}`, maskAssetPath(maskName), docW, docH);
+}
+
+function composeMaskStencilCanvas(baseCanvas, intersectCanvas, forbiddenCanvases, docW, docH) {
+  const bodyData = canvasImageData(baseCanvas);
+  const allowedData = intersectCanvas ? canvasImageData(intersectCanvas) : null;
+  const forbiddenData = forbiddenCanvases.map(canvas => canvasImageData(canvas));
+  return imageDataToCanvas(buildBodyStencil(bodyData, allowedData, forbiddenData));
+}
+
+async function buildCustomStencilFromMasks() {
+  const c = cleanupControls();
+  const docW = DOLL_CONFIG.canvas?.width || 768;
+  const docH = DOLL_CONFIG.canvas?.height || 768;
+  const baseMask = c.stencilBaseMask?.value || 'body_silhouette';
+  const intersectMask = c.stencilIntersectMask?.value || '';
+  const base = await loadStencilIngredientCanvas(baseMask, docW, docH);
+  const intersect = intersectMask ? await loadStencilIngredientCanvas(intersectMask, docW, docH) : null;
+  const forbidden = [];
+  if (c.stencilForbidden?.checked) {
+    for (const name of ['face_forbidden_region', 'hair_forbidden_region']) {
+      try {
+        forbidden.push(await loadMaskCanvas(`stencil:ingredient:${name}`, maskAssetPath(name), docW, docH));
+      } catch {}
+    }
+  }
+  const canvas = composeMaskStencilCanvas(base, intersect, forbidden, docW, docH);
+  const name = c.customStencilName?.value.trim()
+    || `${baseMask}${intersectMask ? `_x_${intersectMask}` : ''}`;
+  addCustomStencil(name, canvas);
+  if (c.stencilSource) c.stencilSource.value = 'custom_stencil';
+  if (c.bodyStencil) c.bodyStencil.checked = true;
+  await applyCleanupFromControls();
+}
+
+async function buildDocumentBodyStencil(settings, docW, docH) {
+  const slot = document.getElementById('select-ingest-slot')?.value || 'topwear';
+  let body;
+  if (settings.source === 'visible_body_layers') {
+    body = await generateDynamicBodyReferenceCanvas();
+  } else if (settings.source === 'project_layer') {
+    body = await projectLayerStencilCanvas(settings.project_layer_id, docW, docH);
+  } else if (settings.source === 'custom_stencil') {
+    const custom = selectedCustomStencil();
+    if (!custom) throw new Error('No custom stencil selected');
+    body = cloneCanvasToSize(custom.canvas, docW, docH);
+  } else {
+    body = await loadMaskCanvas('stencil:body', 'base_rig/masks/body_silhouette.png', docW, docH);
+  }
+  let allowedData = null;
+  if (settings.use_allowed_region) {
+    try {
+      const allowedPath = maskPathForCategory(slot);
+      allowedData = canvasImageData(await loadMaskCanvas(`stencil:allowed:${allowedPath}`, allowedPath, docW, docH));
+    } catch {}
+  }
+  const forbidden = [];
+  if (settings.subtract_forbidden_regions) {
+    for (const name of ['face_forbidden_region', 'hair_forbidden_region']) {
+      try {
+        const mask = await loadMaskCanvas(`stencil:forbidden:${name}`, `base_rig/masks/${name}.png`, docW, docH);
+        forbidden.push(canvasImageData(mask));
+      } catch {}
+    }
+  }
+  return buildBodyStencil(canvasImageData(body), allowedData, forbidden, {
+    expand_px: settings.expand_px,
+    feather_px: settings.feather_px,
+  });
+}
+
+function projectDocumentStencilToSource(docStencil, sourceWidth, sourceHeight) {
+  const out = new Uint8ClampedArray(sourceWidth * sourceHeight * 4);
+  const cx = docStencil.width / 2 + alignSettings.x;
+  const cy = docStencil.height / 2 + alignSettings.y;
+  const scaleX = alignSettings.scaleX || 1;
+  const scaleY = alignSettings.scaleY || 1;
+  for (let y = 0; y < sourceHeight; y++) {
+    for (let x = 0; x < sourceWidth; x++) {
+      const docX = Math.round(cx + (x - sourceWidth / 2) * scaleX);
+      const docY = Math.round(cy + (y - sourceHeight / 2) * scaleY);
+      if (docX < 0 || docY < 0 || docX >= docStencil.width || docY >= docStencil.height) continue;
+      const srcPixel = y * sourceWidth + x;
+      const docAlpha = docStencil.data[(docY * docStencil.width + docX) * 4 + 3];
+      out[srcPixel * 4] = 255;
+      out[srcPixel * 4 + 1] = 255;
+      out[srcPixel * 4 + 2] = 255;
+      out[srcPixel * 4 + 3] = docAlpha;
+    }
+  }
+  return new ImageData(out, sourceWidth, sourceHeight);
+}
+
+async function buildActiveBodyStencil(settings) {
+  const docW = DOLL_CONFIG.canvas?.width || 768;
+  const docH = DOLL_CONFIG.canvas?.height || 768;
+  const docStencil = await buildDocumentBodyStencil(settings, docW, docH);
+  const sourceStencil = projectDocumentStencilToSource(
+    docStencil,
+    cleanupState.sourceImageData.width,
+    cleanupState.sourceImageData.height,
+  );
+  cleanupState.stencilDocImageData = docStencil;
+  cleanupState.stencilImageData = sourceStencil;
+  const docCoverage = getCleanupAlphaStats(docStencil).coverage;
+  const sourceCoverage = getCleanupAlphaStats(sourceStencil).coverage;
+  const custom = settings.source === 'custom_stencil' ? selectedCustomStencil() : null;
+  const layer = settings.source === 'project_layer' ? DOLL_CONFIG.layers.find(l => l.id === settings.project_layer_id) : null;
+  const sourceLabel = custom ? `custom stencil "${custom.name}"` : layer ? `existing layer "${layer.name || layer.id}"` : settings.source;
+  cleanupState.stencilStatus = sourceCoverage > 0
+    ? `Stencil loaded from ${sourceLabel}. Yellow overlay covers ${formatPercent(sourceCoverage)} of the cleaned preview; guide coverage is ${formatPercent(docCoverage)}.`
+    : 'Body stencil loaded, but it does not intersect the cleaned preview frame. Adjust alignment or inspect the On Body preview.';
+  return sourceStencil;
+}
+
+function drawStencilImageDataOverlay(ctx, stencilImageData, color = [255, 230, 0], maxAlpha = 190) {
+  if (!stencilImageData) return;
+  const overlay = new Uint8ClampedArray(stencilImageData.data.length);
+  const { width, height, data } = stencilImageData;
+  for (let pixel = 0; pixel < width * height; pixel++) {
+    const i = pixel * 4;
+    const a = data[i + 3];
+    if (a <= 0) continue;
+    const x = pixel % width;
+    const y = Math.floor(pixel / width);
+    const edge =
+      x === 0 || y === 0 || x === width - 1 || y === height - 1 ||
+      data[(pixel - 1) * 4 + 3] <= 0 ||
+      data[(pixel + 1) * 4 + 3] <= 0 ||
+      data[(pixel - width) * 4 + 3] <= 0 ||
+      data[(pixel + width) * 4 + 3] <= 0;
+    overlay[i] = color[0];
+    overlay[i + 1] = color[1];
+    overlay[i + 2] = color[2];
+    overlay[i + 3] = edge ? 255 : Math.round((a / 255) * maxAlpha);
+  }
+  ctx.putImageData(new ImageData(overlay, width, height), 0, 0);
+}
+
+function drawStencilPreviewCanvas() {
+  const c = cleanupControls();
+  const canvas = c.stencilPreviewCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const docStencil = cleanupState.stencilDocImageData;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!c.bodyStencil?.checked || !docStencil) return;
+  const tmp = document.createElement('canvas');
+  tmp.width = docStencil.width;
+  tmp.height = docStencil.height;
+  drawStencilImageDataOverlay(tmp.getContext('2d'), docStencil, [255, 230, 0], 220);
+  ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
+}
+
+function renderCleanupStencilOverlay() {
+  const c = cleanupControls();
+  const canvas = c.stencilOverlayCanvas;
+  const ctx = canvas?.getContext('2d');
+  if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!c.bodyStencil?.checked) {
+    drawStencilPreviewCanvas();
+    if (c.stencilStatus) {
+      c.stencilStatus.style.display = 'none';
+      c.stencilStatus.textContent = '';
+    }
+    return;
+  }
+  if (!cleanupState.stencilImageData) {
+    drawStencilPreviewCanvas();
+    if (c.stencilStatus && cleanupState.stencilStatus) {
+      c.stencilStatus.style.display = 'block';
+      c.stencilStatus.textContent = cleanupState.stencilStatus;
+    }
+    return;
+  }
+  if (ctx) drawStencilImageDataOverlay(ctx, cleanupState.stencilImageData);
+  drawStencilPreviewCanvas();
+  if (c.stencilStatus) {
+    c.stencilStatus.style.display = 'block';
+    c.stencilStatus.textContent = cleanupState.stencilStatus || 'Body stencil loaded.';
+  }
+}
+
 async function drawCleanupMaskOverlays(ctx, docW, docH) {
   const c = cleanupControls();
   const slot = document.getElementById('select-ingest-slot')?.value || 'topwear';
@@ -659,6 +1063,9 @@ async function drawCleanupMaskOverlays(ctx, docW, docH) {
         tintMask(ctx, mask, 'rgba(255, 71, 87, 0.28)');
       } catch {}
     }
+  }
+  if (c.bodyStencil?.checked && cleanupState.stencilDocImageData) {
+    tintMask(ctx, imageDataToCanvas(cleanupState.stencilDocImageData), 'rgba(255, 230, 0, 0.5)');
   }
 }
 
@@ -709,6 +1116,19 @@ async function updateCleanupWarnings() {
   const docData = canvasImageData(docCanvas);
   const docStats = getCleanupAlphaStats(docData);
   const slot = document.getElementById('select-ingest-slot')?.value || 'topwear';
+  const stencilSettings = cleanupState.stencilSettings || getCleanupStencilSettings();
+  if (stencilSettings.enabled) {
+    warnings.push('Stencil mode is best for tight-fitting assets.');
+    if (LOOSE_STENCIL_CATEGORIES.has(slot)) {
+      warnings.push('This category appears loose; body stencil may clip the asset incorrectly.');
+    }
+    if (typeof cleanupState.stencilOutsideRatio === 'number') {
+      warnings.push(`Visible pixels outside stencil: ${Math.round(cleanupState.stencilOutsideRatio * 1000) / 10}%.`);
+    }
+    if (stencilSettings.mode === 'strict_clip') {
+      warnings.push('Strict clipping may remove lace, trim, straps, or small details.');
+    }
+  }
   if (docStats.bbox) {
     const ratio = (docStats.bbox.width * docStats.bbox.height) / (docW * docH);
     if (ratio < 0.01) warnings.push('Asset may be too small for the selected category.');
@@ -797,7 +1217,9 @@ function wireCleanupWorkbench() {
   const c = cleanupControls();
   const allControls = [
     c.lane, c.whiteBg, c.colorKey, c.keyColor, c.keyTol, c.alpha, c.halo,
-    c.largest, c.islands, c.islandSize, c.bodySubtract,
+    c.largest, c.islands, c.islandSize, c.bodySubtract, c.bodyStencil,
+    c.stencilSource, c.stencilLayerSelect, c.customStencilSelect, c.stencilMode, c.stencilExpand, c.stencilFeather,
+    c.stencilAllowed, c.stencilForbidden, c.stencilPreserveDetails,
   ].filter(Boolean);
   for (const control of allControls) {
     control.addEventListener('input', () => applyCleanupFromControls());
@@ -840,6 +1262,69 @@ function wireCleanupWorkbench() {
   }
   if (c.laneCApply) {
     c.laneCApply.addEventListener('click', applyLaneCProposal);
+  }
+  if (c.customStencilUpload && c.customStencilInput) {
+    c.customStencilUpload.addEventListener('click', () => c.customStencilInput.click());
+    c.customStencilInput.addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        const url = URL.createObjectURL(file);
+        const image = await loadImage(url);
+        URL.revokeObjectURL(url);
+        const docW = DOLL_CONFIG.canvas?.width || 768;
+        const docH = DOLL_CONFIG.canvas?.height || 768;
+        const canvas = document.createElement('canvas');
+        canvas.width = docW;
+        canvas.height = docH;
+        canvas.getContext('2d').drawImage(image, 0, 0, docW, docH);
+        addCustomStencil(c.customStencilName?.value.trim() || file.name.replace(/\.[^.]+$/, '') || 'Uploaded Stencil', canvas);
+        if (c.stencilSource) c.stencilSource.value = 'custom_stencil';
+        if (c.bodyStencil) c.bodyStencil.checked = true;
+        await applyCleanupFromControls();
+      } catch (err) {
+        console.warn('custom stencil upload failed:', err);
+      } finally {
+        event.target.value = '';
+      }
+    });
+  }
+  if (c.customStencilCapture) {
+    c.customStencilCapture.addEventListener('click', async () => {
+      const canvas = await generateDynamicBodyReferenceCanvas();
+      addCustomStencil(c.customStencilName?.value.trim() || 'Captured Body Stencil', canvas);
+      if (c.stencilSource) c.stencilSource.value = 'custom_stencil';
+      if (c.bodyStencil) c.bodyStencil.checked = true;
+      await applyCleanupFromControls();
+    });
+  }
+  if (c.customStencilBuildMask) {
+    c.customStencilBuildMask.addEventListener('click', async () => {
+      try {
+        await buildCustomStencilFromMasks();
+      } catch (err) {
+        console.warn('build custom stencil from masks failed:', err);
+      }
+    });
+  }
+  if (c.customStencilRename) {
+    c.customStencilRename.addEventListener('click', async () => {
+      const selected = selectedCustomStencil();
+      if (!selected || !c.customStencilName?.value.trim()) return;
+      selected.name = c.customStencilName.value.trim();
+      syncCustomStencilSelect();
+      await applyCleanupFromControls();
+    });
+  }
+  if (c.customStencilDelete) {
+    c.customStencilDelete.addEventListener('click', async () => {
+      const selected = selectedCustomStencil();
+      if (!selected) return;
+      cleanupState.customStencils = cleanupState.customStencils.filter(stencil => stencil.id !== selected.id);
+      cleanupState.selectedCustomStencilId = cleanupState.customStencils[0]?.id || null;
+      syncCustomStencilSelect();
+      await applyCleanupFromControls();
+    });
   }
   document.querySelectorAll('[data-cleanup-focus]').forEach(button => {
     button.addEventListener('click', () => setCleanupPreviewFocus(button.dataset.cleanupFocus));
@@ -885,6 +1370,7 @@ function wireCleanupWorkbench() {
       cleanupState.manualMaskImageData = snap.manualMask;
       cleanupState.manualEdits = Math.max(0, cleanupState.manualEdits - 1);
       putCanvasImageData(cleanupState.candidateCanvas, cleanupState.candidateImageData);
+      renderCleanupStencilOverlay();
       await setPendingAssetFromCleanup();
       await renderCleanupBodyPreview();
       await updateCleanupWarnings();
@@ -898,6 +1384,8 @@ function wireCleanupWorkbench() {
       applyCleanupFromControls({ preserveManual: false });
     });
   }
+  syncCustomStencilSelect();
+  syncStencilLayerSelect();
 
   const candidateCanvas = document.getElementById('cleanup-candidate-canvas');
   if (candidateCanvas) {
@@ -1405,6 +1893,11 @@ function wireAssetIngest(targetContainer) {
 
   if (btnIngestSubmit) {
     btnIngestSubmit.addEventListener('click', () => processIngest(targetContainer, assetDropText, txtIngestName));
+  }
+  if (selectIngestSlot) {
+    selectIngestSlot.addEventListener('change', async () => {
+      if (cleanupState.initialized) await applyCleanupFromControls();
+    });
   }
 }
 

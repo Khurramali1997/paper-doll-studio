@@ -2,8 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   applyAlphaThreshold,
   applyMaskProposal,
+  applyStencilClip,
+  buildBodyStencil,
   buildCleanupMetadata,
+  computeOutsideStencilRatio,
   countVisibleMaskOverlap,
+  dilateMask,
+  erodeMask,
   getAlphaStats,
   keepLargestConnectedComponent,
   parseHexColor,
@@ -23,6 +28,14 @@ function imageData(width, height, fill = [0, 0, 0, 0]) {
 function setPixel(img, x, y, rgba) {
   const i = (y * img.width + x) * 4;
   img.data.set(rgba, i);
+}
+
+function maskArea(mask) {
+  let area = 0;
+  for (let i = 3; i < mask.data.length; i += 4) {
+    if (mask.data[i] > 10) area++;
+  }
+  return area;
 }
 
 describe('cleanup utilities', () => {
@@ -144,5 +157,68 @@ describe('cleanup utilities', () => {
         proposal_stats: { coverage: 0.2 },
       },
     });
+  });
+
+  it('builds stencil as body intersect allowed minus forbidden', () => {
+    const body = imageData(3, 1, [255, 255, 255, 255]);
+    const allowed = imageData(3, 1);
+    setPixel(allowed, 0, 0, [255, 255, 255, 255]);
+    setPixel(allowed, 1, 0, [255, 255, 255, 255]);
+    const forbidden = imageData(3, 1);
+    setPixel(forbidden, 1, 0, [255, 255, 255, 255]);
+    const stencil = buildBodyStencil(body, allowed, [forbidden]);
+    expect(stencil.data[3]).toBe(255);
+    expect(stencil.data[7]).toBe(0);
+    expect(stencil.data[11]).toBe(0);
+  });
+
+  it('strict clip removes outside-stencil pixels', () => {
+    const img = imageData(2, 1, [20, 30, 40, 255]);
+    const stencil = imageData(2, 1);
+    setPixel(stencil, 1, 0, [255, 255, 255, 255]);
+    const out = applyStencilClip(img, stencil, 'strict_clip');
+    expect(out.data[3]).toBe(0);
+    expect(out.data[7]).toBe(255);
+  });
+
+  it('soft clip preserves feathered edge behavior', () => {
+    const img = imageData(3, 1, [20, 30, 40, 255]);
+    const stencil = imageData(3, 1);
+    setPixel(stencil, 1, 0, [255, 255, 255, 128]);
+    setPixel(stencil, 2, 0, [255, 255, 255, 255]);
+    const out = applyStencilClip(img, stencil, 'soft_clip');
+    expect(out.data[3]).toBe(0);
+    expect(out.data[7]).toBe(128);
+    expect(out.data[11]).toBe(255);
+  });
+
+  it('expansion increases stencil area', () => {
+    const mask = imageData(5, 5);
+    setPixel(mask, 2, 2, [255, 255, 255, 255]);
+    expect(maskArea(dilateMask(mask, 1))).toBeGreaterThan(maskArea(mask));
+  });
+
+  it('contraction decreases stencil area', () => {
+    const mask = imageData(5, 5, [255, 255, 255, 255]);
+    expect(maskArea(erodeMask(mask, 1))).toBeLessThan(maskArea(mask));
+  });
+
+  it('removes forbidden regions from the stencil', () => {
+    const body = imageData(2, 2, [255, 255, 255, 255]);
+    const forbidden = imageData(2, 2);
+    setPixel(forbidden, 0, 1, [255, 255, 255, 255]);
+    const stencil = buildBodyStencil(body, null, [forbidden]);
+    expect(maskArea(stencil)).toBe(3);
+    expect(stencil.data[(1 * 2 + 0) * 4 + 3]).toBe(0);
+  });
+
+  it('computes outside-stencil ratio correctly', () => {
+    const img = imageData(4, 1);
+    setPixel(img, 0, 0, [1, 1, 1, 255]);
+    setPixel(img, 1, 0, [1, 1, 1, 255]);
+    setPixel(img, 2, 0, [1, 1, 1, 255]);
+    const stencil = imageData(4, 1);
+    setPixel(stencil, 0, 0, [255, 255, 255, 255]);
+    expect(computeOutsideStencilRatio(img, stencil)).toBe(2 / 3);
   });
 });

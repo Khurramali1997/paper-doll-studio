@@ -97,6 +97,7 @@
           <div class="tab-pane active" id="tab-wardrobe">
             <div id="wardrobe-options-container"></div>
             <div id="depth-controls-container"></div>
+            <div id="layer-manager-container"></div>
           </div>
 
           <!-- Tab 2: Appearance -->
@@ -340,7 +341,10 @@
                       <div class="cleanup-preview-tile cleanup-edit-tile is-primary" data-cleanup-view="cleaned">
                         <span>Cleaned</span>
                         <div class="cleanup-edit-frame">
-                          <canvas id="cleanup-candidate-canvas" width="160" height="160"></canvas>
+                          <div class="cleanup-edit-stack" id="cleanup-edit-stack">
+                            <canvas id="cleanup-candidate-canvas" width="160" height="160"></canvas>
+                            <canvas id="cleanup-stencil-overlay-canvas" class="cleanup-stencil-overlay" width="160" height="160"></canvas>
+                          </div>
                         </div>
                       </div>
                       <div class="cleanup-preview-tile" data-cleanup-view="source">
@@ -440,6 +444,118 @@
                   </div>
 
                   <div id="cleanup-warnings" class="status-box cleanup-warnings" style="display: none; margin-top: 0.5rem; padding: 0.45rem; font-size: 0.68rem;"></div>
+                </div>
+              </details>
+
+              <details class="control-group body-stencil-workbench" id="details-body-stencil-workbench" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+                <summary style="cursor: pointer; font-weight: 600; font-size: 0.75rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                  <span>Body Stencil Cleanup</span>
+                  <span class="details-toggle-icon" style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
+                </summary>
+                <div style="margin-top: 0.6rem;">
+                  <div class="cleanup-toggle-grid">
+                    <label class="switch-item"><span class="switch-label">Use Body Stencil</span><input type="checkbox" id="chk-cleanup-body-stencil"><span class="slider"></span></label>
+                  </div>
+
+                  <div class="cleanup-control-grid">
+                    <div class="align-control">
+                      <label for="select-cleanup-stencil-source">Stencil source</label>
+                      <select id="select-cleanup-stencil-source">
+                        <option value="body_silhouette">body_silhouette mask</option>
+                        <option value="visible_body_layers">visible body layers</option>
+                        <option value="project_layer">existing layer alpha</option>
+                        <option value="custom_stencil">custom stencil</option>
+                      </select>
+                    </div>
+                    <div class="align-control">
+                      <label for="select-cleanup-stencil-layer">Existing layer</label>
+                      <select id="select-cleanup-stencil-layer"></select>
+                    </div>
+                    <div class="align-control">
+                      <label for="select-cleanup-custom-stencil">Custom stencil</label>
+                      <select id="select-cleanup-custom-stencil"></select>
+                    </div>
+                    <div class="align-control">
+                      <label for="select-cleanup-stencil-mode">Stencil mode</label>
+                      <select id="select-cleanup-stencil-mode">
+                        <option value="preview_only">Preview Only</option>
+                        <option value="soft_clip">Soft Clip</option>
+                        <option value="strict_clip">Strict Clip</option>
+                      </select>
+                    </div>
+                    <div class="align-control">
+                      <label for="range-cleanup-stencil-expand">Expand / contract <span id="val-cleanup-stencil-expand">0</span>px</label>
+                      <input type="range" id="range-cleanup-stencil-expand" min="-8" max="12" value="0">
+                    </div>
+                    <div class="align-control">
+                      <label for="range-cleanup-stencil-feather">Feather edge <span id="val-cleanup-stencil-feather">0</span>px</label>
+                      <input type="range" id="range-cleanup-stencil-feather" min="0" max="4" value="0">
+                    </div>
+                  </div>
+
+                  <div class="cleanup-toggle-grid">
+                    <label class="switch-item"><span class="switch-label">Use category allowed region</span><input type="checkbox" id="chk-cleanup-stencil-allowed" checked><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Subtract forbidden regions</span><input type="checkbox" id="chk-cleanup-stencil-forbidden" checked><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Preserve small details</span><input type="checkbox" id="chk-cleanup-stencil-preserve-details" checked><span class="slider"></span></label>
+                  </div>
+                  <div class="cleanup-control-grid">
+                    <div class="align-control">
+                      <label for="select-cleanup-stencil-base-mask">Base mask</label>
+                      <select id="select-cleanup-stencil-base-mask">
+                        <option value="body_silhouette">body_silhouette</option>
+                        <option value="visible_body_layers">visible body layers</option>
+                        <option value="topwear_allowed_region">topwear_allowed_region</option>
+                        <option value="dress_allowed_region">dress_allowed_region</option>
+                        <option value="legwear_allowed_region">legwear_allowed_region</option>
+                        <option value="pants_allowed_region">pants_allowed_region</option>
+                        <option value="skirt_allowed_region">skirt_allowed_region</option>
+                        <option value="shoe_allowed_region">shoe_allowed_region</option>
+                        <option value="outerwear_allowed_region">outerwear_allowed_region</option>
+                        <option value="top_allowed_region">top_allowed_region</option>
+                        <option value="torso_region">torso_region</option>
+                        <option value="leg_region">leg_region</option>
+                        <option value="dress_region">dress_region</option>
+                        <option value="shoe_region">shoe_region</option>
+                      </select>
+                    </div>
+                    <div class="align-control">
+                      <label for="select-cleanup-stencil-intersect-mask">Intersect mask</label>
+                      <select id="select-cleanup-stencil-intersect-mask">
+                        <option value="">none</option>
+                        <option value="body_silhouette">body_silhouette</option>
+                        <option value="topwear_allowed_region">topwear_allowed_region</option>
+                        <option value="dress_allowed_region">dress_allowed_region</option>
+                        <option value="legwear_allowed_region">legwear_allowed_region</option>
+                        <option value="pants_allowed_region">pants_allowed_region</option>
+                        <option value="skirt_allowed_region">skirt_allowed_region</option>
+                        <option value="shoe_allowed_region">shoe_allowed_region</option>
+                        <option value="outerwear_allowed_region">outerwear_allowed_region</option>
+                        <option value="top_allowed_region">top_allowed_region</option>
+                        <option value="torso_region">torso_region</option>
+                        <option value="leg_region">leg_region</option>
+                        <option value="dress_region">dress_region</option>
+                        <option value="shoe_region">shoe_region</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="custom-stencil-tools">
+                    <div class="align-control">
+                      <label for="txt-cleanup-stencil-name">Stencil name</label>
+                      <input type="text" id="txt-cleanup-stencil-name" value="Custom Stencil">
+                    </div>
+                    <div class="custom-stencil-actions">
+                      <button type="button" class="cleanup-tool-btn" id="btn-cleanup-stencil-upload">Upload PNG</button>
+                      <button type="button" class="cleanup-tool-btn" id="btn-cleanup-stencil-capture">Capture Body</button>
+                      <button type="button" class="cleanup-tool-btn" id="btn-cleanup-stencil-build-mask">Build From Masks</button>
+                      <button type="button" class="cleanup-tool-btn" id="btn-cleanup-stencil-rename">Rename</button>
+                      <button type="button" class="cleanup-tool-btn" id="btn-cleanup-stencil-delete">Delete</button>
+                      <input type="file" id="input-cleanup-stencil-upload" accept="image/*" style="display: none;">
+                    </div>
+                  </div>
+                  <div class="body-stencil-preview">
+                    <canvas id="cleanup-stencil-preview-canvas" width="180" height="180"></canvas>
+                  </div>
+                  <div id="cleanup-stencil-status" class="status-box cleanup-stencil-status" style="display: none; margin-top: 0.45rem; padding: 0.4rem; font-size: 0.66rem;"></div>
                 </div>
               </details>
 
