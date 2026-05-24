@@ -1,4 +1,4 @@
-import { state, DOLL_CONFIG, TOGGLE_GROUPS, pushHistory } from './state.js';
+import { state, DOLL_CONFIG, TOGGLE_GROUPS, getActiveLayers, pushHistory } from './state.js';
 import { renderDoll } from './render.js';
 
 export function updateActiveOptionButton(slot, value) {
@@ -6,87 +6,93 @@ export function updateActiveOptionButton(slot, value) {
   buttons.forEach(btn => {
     btn.classList.toggle('active', btn.dataset.val === value);
   });
+  const select = document.querySelector(`[data-wardrobe-select="${slot}"]`);
+  if (select) select.value = value;
+  const swatch = document.querySelector(`[data-wardrobe-swatch="${slot}"]`);
+  const slotConfig = DOLL_CONFIG.wardrobe[slot];
+  const selected = slotConfig?.options.find(opt => opt.value === value);
+  if (swatch) swatch.className = `option-preview wardrobe-slot-swatch ${optionPreviewClass(slot, selected)}`;
+}
+
+function optionPreviewClass(slot, opt) {
+  if (!opt || opt.value === 'none') return 'none-bg';
+  if (opt.value === 'skin_wear') return 'skin-bg';
+  if (opt.value !== 'clothing') return 'cloth-generic-bg';
+  if (slot === 'topwear') return 'cloth-top-bg';
+  if (slot === 'dress') return 'cloth-dress-bg';
+  if (slot === 'bottomwear') return 'cloth-bot-bg';
+  if (slot === 'legwear') return 'cloth-leg-bg';
+  if (slot === 'handwear') return 'cloth-hand-bg';
+  if (slot === 'outerwear') return 'cloth-outerwear-bg';
+  if (slot === 'skirt') return 'cloth-skirt-bg';
+  if (slot === 'pants') return 'cloth-pants-bg';
+  return 'cloth-generic-bg';
 }
 
 export function buildUI(targetContainer) {
   const wardrobeContainer = document.getElementById('wardrobe-options-container');
   wardrobeContainer.innerHTML = '';
 
+  const wardrobeGroup = document.createElement('div');
+  wardrobeGroup.className = 'control-group wardrobe-compact-group';
+  const wardrobeTitle = document.createElement('h3');
+  wardrobeTitle.textContent = 'Wardrobe Slots';
+  wardrobeGroup.appendChild(wardrobeTitle);
+
+  const slotList = document.createElement('div');
+  slotList.className = 'wardrobe-slot-list';
+
   Object.entries(DOLL_CONFIG.wardrobe).forEach(([slot, slotConfig]) => {
-    const groupDiv = document.createElement('div');
-    groupDiv.className = 'control-group';
+    const row = document.createElement('div');
+    row.className = 'wardrobe-slot-row';
 
-    const title = document.createElement('h3');
-    title.textContent = `${slotConfig.name || slot.replace("wear", "wear").toUpperCase()} Layer`;
-    groupDiv.appendChild(title);
+    const label = document.createElement('label');
+    label.className = 'wardrobe-slot-label';
+    label.htmlFor = `select-wardrobe-${slot}`;
+    label.textContent = slotConfig.name || slot.replace(/_/g, ' ');
+    row.appendChild(label);
 
-    const gridDiv = document.createElement('div');
-    gridDiv.className = 'option-grid';
+    const current = slotConfig.options.find(opt => opt.value === state.wardrobe[slot]) || slotConfig.options[0];
+    const swatch = document.createElement('span');
+    swatch.className = `option-preview wardrobe-slot-swatch ${optionPreviewClass(slot, current)}`;
+    swatch.dataset.wardrobeSwatch = slot;
+    row.appendChild(swatch);
 
+    const select = document.createElement('select');
+    select.id = `select-wardrobe-${slot}`;
+    select.className = 'wardrobe-slot-select';
+    select.dataset.wardrobeSelect = slot;
     slotConfig.options.forEach(opt => {
-      const btn = document.createElement('button');
-      btn.className = `option-btn ${state.wardrobe[slot] === opt.value ? 'active' : ''}`;
-      btn.dataset.slot = slot;
-      btn.dataset.val = opt.value;
-
-      let previewClass = 'none-bg';
-      let previewText = '';
-      if (opt.value === 'skin_wear') {
-        previewClass = 'skin-bg';
-      } else if (opt.value === 'clothing') {
-        if (slot === 'topwear') previewClass = 'cloth-top-bg';
-        else if (slot === 'dress') previewClass = 'cloth-dress-bg';
-        else if (slot === 'bottomwear') previewClass = 'cloth-bot-bg';
-        else if (slot === 'legwear') previewClass = 'cloth-leg-bg';
-        else if (slot === 'handwear') previewClass = 'cloth-hand-bg';
-        else if (slot === 'outerwear') previewClass = 'cloth-outerwear-bg';
-        else if (slot === 'skirt') previewClass = 'cloth-skirt-bg';
-        else if (slot === 'pants') previewClass = 'cloth-pants-bg';
-        else previewClass = 'cloth-generic-bg';
-      } else if (opt.value === 'none') {
-        previewText = '';
-      } else {
-        previewClass = 'cloth-generic-bg';
-        previewText = opt.name.charAt(0);
-      }
-
-      const previewSpan = document.createElement('span');
-      previewSpan.className = `option-preview ${previewClass}`;
-      if (previewText) previewSpan.textContent = previewText;
-      btn.appendChild(previewSpan);
-
-      const titleSpan = document.createElement('span');
-      titleSpan.className = 'option-title';
-      titleSpan.textContent = opt.name;
-      btn.appendChild(titleSpan);
-
-      btn.addEventListener('click', () => {
-        pushHistory();
-        gridDiv.querySelectorAll('.option-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        state.wardrobe[slot] = opt.value;
-
-        // Dress clothing hides topwear and bottomwear
-        if (slot === 'dress' && opt.value === 'clothing') {
-          state.wardrobe.topwear = 'skin_wear';
-          state.wardrobe.bottomwear = 'skin_wear';
-          document.querySelectorAll('[data-slot="topwear"]').forEach(b =>
-            b.classList.toggle('active', b.dataset.val === 'skin_wear')
-          );
-          document.querySelectorAll('[data-slot="bottomwear"]').forEach(b =>
-            b.classList.toggle('active', b.dataset.val === 'skin_wear')
-          );
-        }
-
-        renderDoll(targetContainer);
-      });
-
-      gridDiv.appendChild(btn);
+      const optEl = document.createElement('option');
+      optEl.value = opt.value;
+      optEl.textContent = opt.name;
+      if (opt.value === state.wardrobe[slot]) optEl.selected = true;
+      select.appendChild(optEl);
     });
 
-    groupDiv.appendChild(gridDiv);
-    wardrobeContainer.appendChild(groupDiv);
+    select.addEventListener('change', () => {
+      pushHistory();
+      state.wardrobe[slot] = select.value;
+
+      if (slot === 'dress' && select.value === 'clothing') {
+        state.wardrobe.topwear = 'skin_wear';
+        state.wardrobe.bottomwear = 'skin_wear';
+        updateActiveOptionButton('topwear', 'skin_wear');
+        updateActiveOptionButton('bottomwear', 'skin_wear');
+      }
+
+      const selected = slotConfig.options.find(opt => opt.value === state.wardrobe[slot]);
+      swatch.className = `option-preview wardrobe-slot-swatch ${optionPreviewClass(slot, selected)}`;
+      renderWardrobeLayerStack(targetContainer);
+      renderDoll(targetContainer);
+    });
+
+    row.appendChild(select);
+    slotList.appendChild(row);
   });
+
+  wardrobeGroup.appendChild(slotList);
+  wardrobeContainer.appendChild(wardrobeGroup);
 
   // Depth overrides (handwear only for now)
   const depthContainer = document.getElementById('depth-controls-container');
@@ -115,20 +121,23 @@ export function buildUI(targetContainer) {
       const optEl = document.createElement('option');
       optEl.value = o.value;
       optEl.textContent = o.text;
-      if (o.value === 'front_body') optEl.selected = true;
+      if (o.value === (state.wardrobeDepth['handwear'] || 'front_body')) optEl.selected = true;
       select.appendChild(optEl);
     });
 
     select.addEventListener('change', (e) => {
       pushHistory();
       state.wardrobeDepth['handwear'] = e.target.value;
+      renderWardrobeLayerStack(targetContainer);
       renderDoll(targetContainer);
     });
-    state.wardrobeDepth['handwear'] = 'front_body';
+    if (!state.wardrobeDepth['handwear']) state.wardrobeDepth['handwear'] = 'front_body';
 
     wrapper.appendChild(select);
     depthContainer.appendChild(wrapper);
   }
+
+  renderWardrobeLayerStack(targetContainer);
 
   // Appearance toggles
   const toggleContainer = document.getElementById('appearance-toggles-container');
@@ -313,6 +322,240 @@ export function buildUI(targetContainer) {
     });
     swatchesContainer.appendChild(btn);
   });
+}
+
+function ensureLayerControls(layerId) {
+  if (!state.layerControls[layerId]) {
+    state.layerControls[layerId] = { visible: true, opacity: 100, zOffset: 0 };
+  }
+  const controls = state.layerControls[layerId];
+  if (controls.visible === undefined) controls.visible = true;
+  if (!Number.isFinite(controls.opacity)) controls.opacity = 100;
+  if (!Number.isFinite(controls.zOffset)) controls.zOffset = 0;
+  return controls;
+}
+
+function displayLayerName(layer) {
+  return state.layerControls[layer.id]?.customName || layer.name || layer.id;
+}
+
+function slotLabel(slot) {
+  return DOLL_CONFIG.wardrobe[slot]?.name || slot.replace(/_/g, ' ');
+}
+
+function baseComputedZ(layer) {
+  return (layer.computedZ ?? layer.z ?? 0) - (state.layerControls[layer.id]?.zOffset || 0);
+}
+
+function reorderWardrobeLayer(draggedId, targetId, targetContainer) {
+  if (!draggedId || !targetId || draggedId === targetId) return;
+  const rows = activeWardrobeLayersForStack();
+  const from = rows.findIndex(layer => layer.id === draggedId);
+  const to = rows.findIndex(layer => layer.id === targetId);
+  if (from < 0 || to < 0) return;
+
+  const zSlots = rows.map(layer => layer.computedZ);
+  const nextRows = [...rows];
+  const [dragged] = nextRows.splice(from, 1);
+  nextRows.splice(to, 0, dragged);
+
+  pushHistory();
+  nextRows.forEach((layer, idx) => {
+    const controls = ensureLayerControls(layer.id);
+    controls.zOffset = Math.max(-200, Math.min(200, zSlots[idx] - baseComputedZ(layer)));
+  });
+  renderWardrobeLayerStack(targetContainer);
+  renderDoll(targetContainer);
+}
+
+function activeWardrobeLayersForStack() {
+  const activeIds = new Set(getActiveLayers().filter(l => l.category === 'wardrobe').map(l => l.id));
+  const hiddenActive = DOLL_CONFIG.layers.filter(layer => {
+    if (layer.category !== 'wardrobe') return false;
+    if (state.layerControls[layer.id]?.visible !== false) return false;
+    const slotConfig = DOLL_CONFIG.wardrobe[layer.subcategory];
+    const selected = slotConfig?.options.find(o => o.value === state.wardrobe[layer.subcategory]);
+    return selected?.layers.includes(layer.id);
+  });
+  const visibleActive = getActiveLayers().filter(l => l.category === 'wardrobe');
+  hiddenActive.forEach(layer => {
+    if (!activeIds.has(layer.id)) {
+      visibleActive.push({
+        ...layer,
+        name: state.layerControls[layer.id]?.customName || layer.name,
+        computedZ: layer.z + (state.layerControls[layer.id]?.zOffset || 0),
+        opacity: state.layerControls[layer.id]?.opacity ?? 100,
+      });
+    }
+  });
+  return visibleActive.sort((a, b) => b.computedZ - a.computedZ);
+}
+
+function renderWardrobeLayerStack(targetContainer) {
+  const depthContainer = document.getElementById('depth-controls-container');
+  if (!depthContainer) return;
+
+  let panel = document.getElementById('wardrobe-layer-stack-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'wardrobe-layer-stack-panel';
+    panel.className = 'control-group wardrobe-layer-stack';
+    depthContainer.appendChild(panel);
+  }
+
+  panel.textContent = '';
+  const title = document.createElement('h3');
+  title.textContent = 'Wardrobe Layer Stack';
+  panel.appendChild(title);
+
+  const rows = activeWardrobeLayersForStack();
+  if (rows.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'group-desc';
+    empty.textContent = 'No wardrobe layers are currently active.';
+    panel.appendChild(empty);
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'wardrobe-layer-list';
+
+  rows.forEach(layer => {
+    const controls = ensureLayerControls(layer.id);
+    const row = document.createElement('div');
+    row.className = `wardrobe-layer-row${controls.visible === false ? ' muted' : ''}`;
+    row.draggable = true;
+    row.dataset.layerId = layer.id;
+    row.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', layer.id);
+      row.classList.add('dragging');
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      document.querySelectorAll('.wardrobe-layer-row.drop-target').forEach(el => el.classList.remove('drop-target'));
+    });
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      row.classList.add('drop-target');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      row.classList.remove('drop-target');
+      reorderWardrobeLayer(e.dataTransfer.getData('text/plain'), layer.id, targetContainer);
+    });
+
+    const visibility = document.createElement('button');
+    visibility.type = 'button';
+    visibility.className = 'layer-icon-btn';
+    visibility.title = controls.visible === false ? 'Show layer' : 'Hide layer';
+    visibility.textContent = controls.visible === false ? 'Show' : 'Hide';
+    visibility.addEventListener('click', () => {
+      pushHistory();
+      controls.visible = controls.visible === false;
+      renderWardrobeLayerStack(targetContainer);
+      renderDoll(targetContainer);
+    });
+    row.appendChild(visibility);
+
+    const meta = document.createElement('div');
+    meta.className = 'wardrobe-layer-meta';
+    const name = document.createElement('input');
+    name.className = 'wardrobe-layer-name-input';
+    name.value = displayLayerName(layer);
+    name.title = 'Layer display name';
+    name.addEventListener('dragstart', e => e.preventDefault());
+    name.addEventListener('keydown', e => {
+      if (e.key === 'Enter') name.blur();
+    });
+    name.addEventListener('focus', () => {
+      name.dataset.originalValue = displayLayerName(layer);
+    });
+    name.addEventListener('change', () => {
+      const nextName = name.value.trim();
+      const prevName = name.dataset.originalValue || displayLayerName(layer);
+      if (!nextName) {
+        name.value = prevName;
+        return;
+      }
+      if (nextName === prevName) return;
+      pushHistory();
+      controls.customName = nextName;
+      renderWardrobeLayerStack(targetContainer);
+      renderDoll(targetContainer);
+    });
+    const sub = document.createElement('span');
+    sub.className = 'wardrobe-layer-sub';
+    sub.textContent = `${slotLabel(layer.subcategory)} · z ${layer.computedZ}`;
+    meta.appendChild(name);
+    meta.appendChild(sub);
+    row.appendChild(meta);
+
+    const order = document.createElement('div');
+    order.className = 'wardrobe-layer-order';
+    [
+      { label: 'Back', delta: -5 },
+      { label: 'Front', delta: 5 },
+    ].forEach(({ label, delta }) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'layer-order-btn';
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        pushHistory();
+        controls.zOffset = Math.max(-80, Math.min(80, (controls.zOffset || 0) + delta));
+        renderWardrobeLayerStack(targetContainer);
+        renderDoll(targetContainer);
+      });
+      order.appendChild(btn);
+    });
+    row.appendChild(order);
+
+    const opacityWrap = document.createElement('label');
+    opacityWrap.className = 'wardrobe-opacity-control';
+    const opacityText = document.createElement('span');
+    opacityText.textContent = `${controls.opacity}%`;
+    const opacity = document.createElement('input');
+    opacity.type = 'range';
+    opacity.min = '0';
+    opacity.max = '100';
+    opacity.step = '5';
+    opacity.value = String(controls.opacity);
+    opacity.addEventListener('input', (e) => {
+      if (opacity.dataset.dirty !== 'true') {
+        pushHistory();
+        opacity.dataset.dirty = 'true';
+      }
+      controls.opacity = parseInt(e.target.value, 10);
+      opacityText.textContent = `${controls.opacity}%`;
+      renderDoll(targetContainer);
+    });
+    opacity.addEventListener('change', () => {
+      opacity.dataset.dirty = 'false';
+      renderWardrobeLayerStack(targetContainer);
+      renderDoll(targetContainer);
+    });
+    opacityWrap.appendChild(opacityText);
+    opacityWrap.appendChild(opacity);
+    row.appendChild(opacityWrap);
+
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'layer-reset-btn';
+    reset.textContent = 'Reset';
+    reset.addEventListener('click', () => {
+      pushHistory();
+      state.layerControls[layer.id] = { visible: true, opacity: 100, zOffset: 0 };
+      renderWardrobeLayerStack(targetContainer);
+      renderDoll(targetContainer);
+    });
+    row.appendChild(reset);
+
+    list.appendChild(row);
+  });
+
+  panel.appendChild(list);
 }
 
 function createSliderBlock(title, id, min, max, val, suffix, onChange) {

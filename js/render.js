@@ -59,6 +59,7 @@ export function renderDoll(targetContainer) {
     img.alt = layer.id;
     img.className = 'doll-layer-img';
     img.style.zIndex = layer.computedZ;
+    img.style.opacity = (layer.opacity ?? 100) / 100;
 
     let x = 0;
     let y = 0;

@@ -304,6 +304,7 @@ function wireSaveLoad() {
 function rebuildAfterStateChange() {
   // Sync UI to current state
   const targetContainer = document.getElementById('doll-layers-target');
+  buildUI(targetContainer);
 
   Object.entries(state.wardrobe).forEach(([slot, val]) => {
     updateActiveOptionButton(slot, val);

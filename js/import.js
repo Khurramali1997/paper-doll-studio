@@ -42,6 +42,7 @@ const cleanupState = {
   mlAssist: null,
   proposalImageData: null,
   proposalStats: null,
+  previewFocus: 'cleaned',
   sourceLane: 'transparent_png',
   brushDown: false,
   brushTool: 'erase',
@@ -285,6 +286,8 @@ function cleanupControls() {
     laneCBgRemove: document.getElementById('chk-cleanup-lane-c-bg-remove'),
     laneCStatus: document.getElementById('cleanup-lane-c-status'),
     proposalCanvas: document.getElementById('cleanup-proposal-canvas'),
+    previewGrid: document.getElementById('cleanup-preview-grid'),
+    previewCycle: document.getElementById('btn-cleanup-preview-cycle'),
     brush: document.getElementById('range-cleanup-brush'),
     zoom: document.getElementById('range-cleanup-zoom'),
     zoomFit: document.getElementById('btn-cleanup-fit'),
@@ -316,6 +319,24 @@ function syncLaneCAssistVisibility() {
   const isLaneC = (c.lane?.value || cleanupState.sourceLane) === 'clothed_guide';
   if (c.laneCAssist) c.laneCAssist.style.display = isLaneC ? 'block' : 'none';
   if (c.proposalCanvas) c.proposalCanvas.style.opacity = isLaneC ? '1' : '0.45';
+}
+
+function setCleanupPreviewFocus(view) {
+  const order = ['cleaned', 'source', 'onbody', 'proposal'];
+  const nextView = order.includes(view) ? view : 'cleaned';
+  cleanupState.previewFocus = nextView;
+  document.querySelectorAll('[data-cleanup-view]').forEach(tile => {
+    tile.classList.toggle('is-primary', tile.dataset.cleanupView === nextView);
+  });
+  document.querySelectorAll('[data-cleanup-focus]').forEach(button => {
+    button.classList.toggle('active', button.dataset.cleanupFocus === nextView);
+  });
+}
+
+function cycleCleanupPreviewFocus() {
+  const order = ['cleaned', 'source', 'onbody', 'proposal'];
+  const idx = order.indexOf(cleanupState.previewFocus);
+  setCleanupPreviewFocus(order[(idx + 1) % order.length]);
 }
 
 function applyCleanupZoom() {
@@ -372,11 +393,13 @@ async function initCleanupWorkbenchForImage(image) {
   cleanupState.mlAssist = null;
   cleanupState.proposalImageData = null;
   cleanupState.proposalStats = null;
+  cleanupState.previewFocus = 'cleaned';
   cleanupState.sourceLane = cleanupControls().lane?.value || 'transparent_png';
   cleanupState.activeMaskCache = {};
 
   if (details) details.open = true;
   putCanvasImageData(candidateCanvas, cleanupState.candidateImageData);
+  setCleanupPreviewFocus(cleanupState.previewFocus);
   syncLaneCAssistVisibility();
   fitCleanupZoom();
   await applyCleanupFromControls({ preserveManual: false });
@@ -818,6 +841,18 @@ function wireCleanupWorkbench() {
   if (c.laneCApply) {
     c.laneCApply.addEventListener('click', applyLaneCProposal);
   }
+  document.querySelectorAll('[data-cleanup-focus]').forEach(button => {
+    button.addEventListener('click', () => setCleanupPreviewFocus(button.dataset.cleanupFocus));
+  });
+  document.querySelectorAll('[data-cleanup-view]').forEach(tile => {
+    tile.addEventListener('click', (event) => {
+      if (event.target?.closest?.('.cleanup-edit-frame') && tile.classList.contains('is-primary')) return;
+      setCleanupPreviewFocus(tile.dataset.cleanupView);
+    });
+  });
+  if (c.previewCycle) {
+    c.previewCycle.addEventListener('click', cycleCleanupPreviewFocus);
+  }
 
   if (c.brush) {
     c.brush.addEventListener('input', syncCleanupControlLabels);
@@ -868,6 +903,11 @@ function wireCleanupWorkbench() {
   if (candidateCanvas) {
     candidateCanvas.addEventListener('mousedown', (e) => {
       if (!cleanupState.candidateImageData) return;
+      if (cleanupState.previewFocus !== 'cleaned') {
+        setCleanupPreviewFocus('cleaned');
+        e.preventDefault();
+        return;
+      }
       cleanupState.brushDown = true;
       cleanupState.undoStack.push({
         candidate: cloneCleanupImageData(cleanupState.candidateImageData),

@@ -19,6 +19,7 @@ export const state = {
   wardrobe: {},
   wardrobeDepth: {},
   toggles: {},
+  layerControls: {},
   dyes: {
     hair: { hue: 0, sat: 100, light: 100 },
     eyes: { hue: 0 }
@@ -39,6 +40,7 @@ function snapshot() {
     wardrobe: JSON.parse(JSON.stringify(state.wardrobe)),
     wardrobeDepth: JSON.parse(JSON.stringify(state.wardrobeDepth)),
     toggles: JSON.parse(JSON.stringify(state.toggles)),
+    layerControls: JSON.parse(JSON.stringify(state.layerControls)),
     dyes: JSON.parse(JSON.stringify(state.dyes)),
     offsets: JSON.parse(JSON.stringify(state.offsets))
   };
@@ -48,6 +50,7 @@ function applySnapshot(snap) {
   state.wardrobe = snap.wardrobe;
   state.wardrobeDepth = snap.wardrobeDepth;
   state.toggles = snap.toggles;
+  state.layerControls = snap.layerControls || {};
   state.dyes = snap.dyes;
   state.offsets = snap.offsets;
 }
@@ -173,6 +176,10 @@ function computeZForLayer(layer) {
       else if (depth === 'front_clothes') finalZ = isClothing ? 260 : 259;
     }
   }
+  const controls = state.layerControls[layer.id];
+  if (controls && Number.isFinite(controls.zOffset)) {
+    finalZ += controls.zOffset;
+  }
   return finalZ;
 }
 
@@ -187,6 +194,9 @@ export function getActiveLayers() {
   }
 
   DOLL_CONFIG.layers.forEach(layer => {
+    const controls = state.layerControls[layer.id];
+    if (controls?.visible === false) return;
+
     if (layer.category === 'wardrobe') {
       const slot = layer.subcategory;
       const activeOptionVal = effectiveWardrobe[slot];
@@ -211,7 +221,12 @@ export function getActiveLayers() {
     }
   });
 
-  return active.map(l => ({ ...l, computedZ: computeZForLayer(l) })).sort((a, b) => a.computedZ - b.computedZ);
+  return active.map(l => ({
+    ...l,
+    name: state.layerControls[l.id]?.customName || l.name,
+    computedZ: computeZForLayer(l),
+    opacity: state.layerControls[l.id]?.opacity ?? 100,
+  })).sort((a, b) => a.computedZ - b.computedZ);
 }
 
 export function getBaseLayers() {
@@ -247,6 +262,7 @@ export function saveCustomization() {
     wardrobe: state.wardrobe,
     wardrobeDepth: state.wardrobeDepth,
     toggles: state.toggles,
+    layerControls: state.layerControls,
     dyes: state.dyes,
     offsets: state.offsets,
     savedAt: new Date().toISOString()
@@ -265,6 +281,7 @@ export function loadCustomization() {
     state.wardrobe = { ...state.wardrobe, ...data.wardrobe };
     state.wardrobeDepth = { ...state.wardrobeDepth, ...(data.wardrobeDepth || {}) };
     state.toggles = { ...state.toggles, ...data.toggles };
+    state.layerControls = { ...state.layerControls, ...(data.layerControls || {}) };
     state.dyes = { ...state.dyes, ...data.dyes };
     state.offsets = { ...state.offsets, ...(data.offsets || {}) };
     return true;
@@ -283,6 +300,7 @@ export function exportStateJSON() {
     wardrobe: state.wardrobe,
     wardrobeDepth: state.wardrobeDepth,
     toggles: state.toggles,
+    layerControls: state.layerControls,
     dyes: state.dyes,
     offsets: state.offsets,
     zoom: state.zoom,
@@ -300,6 +318,7 @@ export function importStateJSON(jsonStr) {
   state.wardrobe = { ...state.wardrobe, ...data.wardrobe };
   if (data.wardrobeDepth) state.wardrobeDepth = { ...state.wardrobeDepth, ...data.wardrobeDepth };
   state.toggles = { ...state.toggles, ...data.toggles };
+  if (data.layerControls) state.layerControls = { ...state.layerControls, ...data.layerControls };
   state.dyes = { ...state.dyes, ...data.dyes };
   if (data.offsets) state.offsets = { ...state.offsets, ...data.offsets };
   if (data.zoom !== undefined) state.zoom = data.zoom;
