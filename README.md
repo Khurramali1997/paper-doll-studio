@@ -124,7 +124,14 @@ wardrobe_manifest.json ──→ iterate ──→ public/assets/compiled/.../{m
 │   ├── rig_autodetect.py        # Silhouette → draft rig.json
 │   ├── reference_pack.py        # Silhouette + outline + canny + depth + pose ZIP
 │   ├── pose_estimator.py        # MediaPipe BlazePose → OpenPose mapper
-│   └── depth_estimator.py       # Depth Anything V2 ONNX wrapper
+│   ├── depth_estimator.py       # Depth Anything V2 ONNX wrapper
+│   ├── pattern_constructor.py   # Digital Tailor — body-slice garment constructor (8 recipes)
+│   ├── garment_schema.py        # Garment landmark extraction
+│   ├── danbooru_mapper.py       # Danbooru tag → neckline/sleeve/silhouette hints
+│   ├── anime_segmenter.py       # ISNet-anime foreground segmentation wrapper
+│   ├── anime_detector.py        # Anime face/hand detection for forbidden regions
+│   ├── semantic_layer.py        # Semantic hint aggregator
+│   └── stencil_pipeline.py      # Stencil geometry channel pipeline
 ├── importers/                   # PSD import adapters
 │   ├── flat_psd_importer.py     # v0.1 flat PSD importer
 │   ├── flat_layer_map.json      # Layer name mapping + aliases
@@ -136,12 +143,15 @@ wardrobe_manifest.json ──→ iterate ──→ public/assets/compiled/.../{m
 │   ├── import.js                # PSD + garment ingestion + alignment UI + rig autodetect
 │   ├── wardrobe.js              # Wardrobe panel
 │   ├── calibration.js           # Per-layer color/offset adjustments
-│   └── export.js                # ZIP export + silhouette + reference pack
+│   ├── export.js                # ZIP export + silhouette + reference pack
+│   └── stencils.js              # Stencil editor + Fabric Asset Generator + Digital Tailor UI
 ├── server.py                    # FastAPI backend
 │                                #   POST /api/compile-asset
 │                                #   POST /api/reference-pack
+│                                #   POST /api/reference-channels
 │                                #   POST /api/rig-autodetect
 │                                #   GET  /api/guide-templates.zip
+│                                #   POST /api/construct-pattern
 ├── base_rig/                    # Generated base rig
 │   ├── rig.json                 # Anchors, canvas, garment regions
 │   └── masks/                   # Body silhouette + per-category allowed regions
@@ -186,7 +196,7 @@ npx vitest run
 venv/bin/python -m pytest && npx vitest run
 ```
 
-133 total tests (89 Python + 44 JS). The estimator unit tests mock model inference; no model downloads occur during `pytest`.
+156 total tests (105 Python + 51 JS). The estimator unit tests mock model inference; no model downloads occur during `pytest`.
 
 ## Importing Garments
 
@@ -242,14 +252,55 @@ Click **Export Project (ZIP)** to download `paperdoll_project.zip` containing:
 
 ## Progress
 
-- Flat PSD import pipeline complete (name normalization, aliases, composites, splits)
+### ✅ Milestone 1 — Core Pipeline (complete)
+- Flat PSD import pipeline (name normalization, aliases, composites, splits)
 - All compiler modules share `category_registry.py` — no hardcoded lists
 - v0.1 manual-placement flow with natural-dims-centered bake and pixel-honest inputs
-- Live preview and bake share the same transform helper (`applyBakeTransform`) — preview and output cannot drift
-- Canonical z-order applied at ingest; `shoes` / `skirt` / `pants` promoted to first-class JS wardrobe slots
-- PSD-aware canvas resize on import
-- Non-destructive validation by default; alpha-aware chroma key
+- Live preview and bake share `applyBakeTransform` — preview and output cannot drift
+- Canonical z-order at ingest; `shoes` / `skirt` / `pants` as first-class wardrobe slots
+- PSD-aware canvas resize; non-destructive validation; alpha-aware chroma key
+
+### ✅ Milestone 2 — Authoring Tools (complete)
 - Anchor-derived guide template polygons in human + AI variants
-- Silhouette-based rig autodetect with full schema output
-- AI conditioning reference pack with real MediaPipe pose + Depth Anything depth
-- 133 passing tests
+- Silhouette-based rig autodetect — 17 anchors from a body silhouette PNG
+- AI conditioning reference pack: MediaPipe pose + Depth Anything V2 depth + Canny + outline + silhouette
+
+### ✅ Milestone 3 — Digital Tailor V1 (complete)
+Deterministic mask-to-garment constructor. No diffusion. Geometry is the source of truth.
+
+**Architecture (geometry-first):**
+- `body_silhouette` is the authoritative character contour — not abstract coordinate polygons
+- Each garment zone is a vertical slice of the body silhouette bounded by `rig.json` anchor Y positions (e.g. bodice = rows neck_y → waist_y). This gives pixel-accurate body curves, correct arm-hole shapes, and real proportions instead of trapezoid approximations.
+- Semantic hints (Danbooru neckline tag → `v_neck` / `round_neck` / `off_shoulder`) tell the system *what* to carve. The neck anchor tells it *where*. The body contour provides the actual pixel boundary.
+- `hair_forbidden_region` removed from all recipes — garments render under the hair layer in the z-stack, so subtracting those pixels was wrong (was removing 44 % of the bodice).
+
+**8 recipes across 5 categories:**
+
+| Recipe | Category | Key modifier |
+|---|---|---|
+| `bodice` | topwear | round-neck cutout |
+| `tight_top` | topwear | round-neck + erode 2 px |
+| `bodycon_dress` | dress | round-neck + erode 6 px (pencil silhouette) |
+| `tight_dress` | dress | round-neck + erode 4 px |
+| `simple_flared_dress` | dress | round-neck + flare 60 px (a-line silhouette) |
+| `leggings` | legwear | waist-to-ankle body slice |
+| `stockings` | legwear | waist-to-ankle + erode 3 px |
+| `gloves` | handwear | body − torso − leg − face |
+
+**7 user-controllable transforms:** expand-x, expand-y, dilate, erode, smooth, flare (row-by-row hem widening), taper (waist pinch).
+
+**Material + effects:** solid color, texture tile, edge stroke, inner shadow, highlight gradient.
+
+**UI (Stencils tab → Digital Tailor panel):**
+- Recipe selector, color picker, texture upload
+- Live slider grid with value readouts
+- Effect toggles (edge stroke on / inner shadow on / highlight off by default)
+- Generate → thumbnail preview + area readout
+- "Send to Cleanup Workbench" / "Send to Align/Bake" — both land correctly with button enabled, name pre-filled, alignment reset to 1:1, and live overlay firing immediately
+
+**State hygiene fixes shipped alongside:**
+- PSD swap now resets the entire import/ingest panel (pending asset, alignment, cleanup canvases, button, name field) so a new character never inherits a previous session's fit
+- `character_composite` stencil source auto-refreshes after PSD load via `paperdoll:psd-loaded` custom event
+- `buildGeometryVariants` always fetches a fresh composite before building geometry channels
+
+**Tests:** 16 pytest (pattern constructor) + 7 Vitest (data contract) — 156 total passing
