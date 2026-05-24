@@ -25,7 +25,8 @@ export async function generateBodySilhouetteCanvas() {
   // the body shape when no skin/body layer exists in the PSD.
   for (const layer of DOLL_CONFIG.layers) {
     if (SILHOUETTE_EXCLUDED_CATEGORIES.has(layer.category)) continue;
-    const src = localImageCache[layer.file] || `public/assets/${layer.file}`;
+    const src = localImageCache[layer.file];
+    if (!src) continue;
     try {
       const img = await loadImage(src);
       ctx.drawImage(img, 0, 0, docW, docH);
@@ -75,7 +76,8 @@ export async function generateBodyCompositeCanvas() {
   const layers = [...DOLL_CONFIG.layers].sort((a, b) => (a.z || 0) - (b.z || 0));
   for (const layer of layers) {
     if (ML_BODY_EXCLUDED_CATEGORIES.has(layer.category)) continue;
-    const src = localImageCache[layer.file] || `public/assets/${layer.file}`;
+    const src = localImageCache[layer.file];
+    if (!src) continue;
     try {
       const img = await loadImage(src);
       ctx.drawImage(img, 0, 0, docW, docH);

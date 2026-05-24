@@ -51,11 +51,14 @@ export function cacheImage(filename, objectUrl, blob) {
 
 export function renderDoll(targetContainer) {
   targetContainer.innerHTML = '';
+  if (Object.keys(localImageCache).length === 0) return;
   const activeLayers = getActiveLayers();
 
   activeLayers.forEach(layer => {
+    const src = localImageCache[layer.file];
+    if (!src) return;
     const img = document.createElement('img');
-    img.src = localImageCache[layer.file] || `public/assets/${layer.file}`;
+    img.src = src;
     img.alt = layer.id;
     img.className = 'doll-layer-img';
     img.style.zIndex = layer.computedZ;
