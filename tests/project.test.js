@@ -240,7 +240,13 @@ describe('Utility Functions', () => {
 
     it('should identify legwear', () => {
       expect(utils.getWardrobeSlot('cloth_legs')).toBe('legwear');
-      expect(utils.getWardrobeSlot('boots')).toBe('legwear');
+      expect(utils.getWardrobeSlot('tights')).toBe('legwear');
+    });
+
+    it('should identify shoes', () => {
+      expect(utils.getWardrobeSlot('boots')).toBe('shoes');
+      expect(utils.getWardrobeSlot('footwear')).toBe('shoes');
+      expect(utils.getWardrobeSlot('shoes_leather')).toBe('shoes');
     });
 
     it('should identify handwear', () => {

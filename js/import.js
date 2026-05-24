@@ -1,7 +1,7 @@
 import { state, DOLL_CONFIG, TOGGLE_GROUPS, pushHistory } from './state.js';
 import {
-  renderDoll, pendingAssetFile, pendingAssetImage,
-  setPendingAsset, clearImageCache, cacheImage, alignSettings,
+  renderDoll, pendingAssetFile, pendingAssetImage, pendingPreviewImage, pendingPreviewIsBaked,
+  setPendingAsset, setPendingPreviewImage, clearImageCache, cacheImage, alignSettings,
   generateDynamicBodyReferenceCanvas, updateDollCursor, updateViewportTransform
 } from './render.js';
 import {
@@ -9,13 +9,805 @@ import {
   canvasToBlob, loadImage, getBoundingBox, applyChromaKey,
   applyBakeTransform
 } from './utils.js';
+import {
+  cloneImageData as cloneCleanupImageData,
+  removeWhiteBackground,
+  removeColorKey,
+  applyAlphaThreshold,
+  cleanupHalo,
+  keepLargestConnectedComponent,
+  removeSmallIslands,
+  getAlphaStats as getCleanupAlphaStats,
+  parseHexColor,
+  countVisibleMaskOverlap,
+} from './cleanup.js';
 import { clearFitPreview } from './fit_preview.js';
 import { buildUI, updateActiveOptionButton } from './wardrobe.js';
 import { buildCalibrateOptions, updateCalibrateUI } from './calibration.js';
 
 let mlBgModule = null;
 
+const cleanupState = {
+  initialized: false,
+  sourceCanvas: null,
+  sourceImageData: null,
+  candidateCanvas: null,
+  candidateImageData: null,
+  manualMaskImageData: null,
+  undoStack: [],
+  manualEdits: 0,
+  operations: [],
+  sourceLane: 'transparent_png',
+  brushDown: false,
+  brushTool: 'erase',
+  activeMaskCache: {},
+};
+
+// ===== AI Isolation cache + live preview =====
+// One cached AI-processed image per source. When the user toggles modes,
+// we only re-POST to the backend if the source or mode changed.
+let aiProcessedCache = null;  // { sourceKey, mode, blob, objectUrl, image }
+let livePreviewTargetContainer = null;
+let livePreviewScheduled = false;
+let livePreviewRendering = false;
+let livePreviewDirty = false;
+
+const MIN_AI_ALPHA_COVERAGE = 0.002;
+const MIN_AI_OPAQUE_PIXELS = 128;
+
+function _sourceKey() {
+  const f = pendingAssetFile;
+  if (!f) return null;
+  return `${f.name}::${f.size}::${f.lastModified || ''}`;
+}
+
+async function ensureAIProcessed(mode) {
+  if (!pendingAssetFile || mode === 'off') return null;
+  const key = _sourceKey();
+  if (aiProcessedCache?.sourceKey === key && aiProcessedCache?.mode === mode) {
+    return aiProcessedCache.image;
+  }
+  const status = document.getElementById('ai-isolation-status');
+  if (status) { status.style.display = 'block'; status.textContent = 'Processing... (first run downloads model)'; }
+  const fd = new FormData();
+  fd.append('image', pendingAssetFile);
+  fd.append('mode', mode);
+  const res = await fetch('/api/ai-process', { method: 'POST', body: fd });
+  if (!res.ok) {
+    if (status) { status.textContent = `Failed (${res.status})`; status.style.color = 'var(--danger-color)'; }
+    throw new Error(`AI processing failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  if (aiProcessedCache?.objectUrl) URL.revokeObjectURL(aiProcessedCache.objectUrl);
+  const objectUrl = URL.createObjectURL(blob);
+  const image = await loadImage(objectUrl);
+  const alpha = getAlphaStats(image);
+  if (alpha.coverage < MIN_AI_ALPHA_COVERAGE || alpha.opaquePixels < MIN_AI_OPAQUE_PIXELS) {
+    URL.revokeObjectURL(objectUrl);
+    if (status) {
+      status.style.display = 'block';
+      status.style.color = 'var(--danger-color)';
+      status.textContent = 'AI isolation returned an empty mask; using the original image.';
+    }
+    throw new Error('AI isolation returned an empty mask');
+  }
+  aiProcessedCache = { sourceKey: key, mode, blob, objectUrl, image };
+  if (status) { status.textContent = 'Cached ✓'; status.style.color = ''; }
+  return image;
+}
+
+function getAlphaStats(image) {
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let opaquePixels = 0;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] > 10) opaquePixels++;
+  }
+  return {
+    opaquePixels,
+    coverage: opaquePixels / (canvas.width * canvas.height),
+  };
+}
+
+function _currentAIMode() {
+  const sel = document.getElementById('select-ai-isolation');
+  const mode = sel ? sel.value : 'off';
+  return mode === 'clothing-isolate' ? 'off' : mode;
+}
+
+function _chromaKeyEnabled() {
+  const c = document.getElementById('chk-chromakey');
+  return !!(c && c.checked);
+}
+
+function _subtractEnabled() {
+  const c = document.getElementById('chk-subtract-body');
+  return !!(c && c.checked);
+}
+
+function updatePreviewPipelineStatus(busy = false) {
+  const status = document.getElementById('preview-pipeline-status');
+  if (!status) return;
+
+  status.textContent = '';
+
+  const title = document.createElement('span');
+  title.className = 'preview-pipeline-title';
+  title.textContent = busy ? 'Rendering' : 'Preview';
+  status.appendChild(title);
+
+  const aiMode = _currentAIMode();
+  const steps = [
+    { label: pendingAssetImage ? 'Source' : 'No image', active: !!pendingAssetImage },
+    { label: aiMode === 'off' ? 'AI off' : 'AI', active: aiMode !== 'off' },
+    { label: 'Key', active: _chromaKeyEnabled() },
+    { label: 'Subtract', active: _subtractEnabled() },
+  ];
+
+  if (busy) {
+    steps.push({ label: 'Updating', active: true, busy: true });
+  }
+
+  for (const step of steps) {
+    const chip = document.createElement('span');
+    chip.className = `preview-chip${step.active ? ' active' : ''}${step.busy ? ' busy' : ''}`;
+    chip.textContent = step.label;
+    status.appendChild(chip);
+  }
+}
+
+async function applyBodySubtractionToCanvas(canvas) {
+  const origCtx = canvas.getContext('2d');
+  const refCanvas = await generateDynamicBodyReferenceCanvas();
+
+  const scaledRefCanvas = document.createElement('canvas');
+  scaledRefCanvas.width = canvas.width;
+  scaledRefCanvas.height = canvas.height;
+  const scaledRefCtx = scaledRefCanvas.getContext('2d');
+  scaledRefCtx.drawImage(refCanvas, 0, 0, canvas.width, canvas.height);
+
+  const origData = origCtx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = origData.data;
+  const refData = scaledRefCtx.getImageData(0, 0, scaledRefCanvas.width, scaledRefCanvas.height).data;
+
+  const width = canvas.width;
+  const height = canvas.height;
+  const dist = new Int32Array(width * height);
+  const nearestIdx = new Int32Array(width * height);
+  const maxDist = 999999;
+
+  for (let i = 0; i < width * height; i++) {
+    if (refData[i * 4 + 3] > 10) { dist[i] = 0; nearestIdx[i] = i; }
+    else { dist[i] = maxDist; nearestIdx[i] = -1; }
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (dist[idx] > 0) {
+        let d = dist[idx], n = nearestIdx[idx];
+        if (x > 0 && dist[idx - 1] + 1 < d) { d = dist[idx - 1] + 1; n = nearestIdx[idx - 1]; }
+        if (y > 0 && dist[idx - width] + 1 < d) { d = dist[idx - width] + 1; n = nearestIdx[idx - width]; }
+        dist[idx] = d; nearestIdx[idx] = n;
+      }
+    }
+  }
+
+  for (let y = height - 1; y >= 0; y--) {
+    for (let x = width - 1; x >= 0; x--) {
+      const idx = y * width + x;
+      if (dist[idx] > 0) {
+        let d = dist[idx], n = nearestIdx[idx];
+        if (x < width - 1 && dist[idx + 1] + 1 < d) { d = dist[idx + 1] + 1; n = nearestIdx[idx + 1]; }
+        if (y < height - 1 && dist[idx + width] + 1 < d) { d = dist[idx + width] + 1; n = nearestIdx[idx + width]; }
+        dist[idx] = d; nearestIdx[idx] = n;
+      }
+    }
+  }
+
+  const tol = parseInt(document.getElementById('range-subtract-tolerance')?.value || '60', 10);
+  const maxSearchRadius = 15;
+
+  for (let i = 0; i < pixels.length; i += 4) {
+    const a = pixels[i + 3];
+    if (a > 0) {
+      const pixelIdx = i / 4;
+      const d = dist[pixelIdx];
+      if (d <= maxSearchRadius) {
+        const nIdx = nearestIdx[pixelIdx];
+        if (nIdx >= 0) {
+          const diff = Math.abs(pixels[i] - refData[nIdx * 4]) +
+                       Math.abs(pixels[i + 1] - refData[nIdx * 4 + 1]) +
+                       Math.abs(pixels[i + 2] - refData[nIdx * 4 + 2]);
+          if (diff < tol) pixels[i + 3] = 0;
+        }
+      }
+    }
+  }
+
+  origCtx.putImageData(origData, 0, 0);
+}
+
+function cleanupHasEdits() {
+  return cleanupState.operations.length > 0 || cleanupState.manualEdits > 0;
+}
+
+function getCleanupMetadata() {
+  if (!cleanupState.initialized) return null;
+  return {
+    source_lane: cleanupState.sourceLane,
+    operations: [...cleanupState.operations],
+    manual_edits: cleanupState.manualEdits,
+  };
+}
+
+function canvasImageData(canvas) {
+  return canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+}
+
+function putCanvasImageData(canvas, imageData) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function cleanupControls() {
+  return {
+    lane: document.getElementById('select-cleanup-lane'),
+    whiteBg: document.getElementById('chk-cleanup-white-bg'),
+    colorKey: document.getElementById('chk-cleanup-color-key'),
+    keyColor: document.getElementById('color-cleanup-key'),
+    keyTol: document.getElementById('range-cleanup-key-tolerance'),
+    alpha: document.getElementById('range-cleanup-alpha-threshold'),
+    halo: document.getElementById('chk-cleanup-halo'),
+    largest: document.getElementById('chk-cleanup-largest'),
+    islands: document.getElementById('chk-cleanup-islands'),
+    islandSize: document.getElementById('range-cleanup-island-size'),
+    bodySubtract: document.getElementById('chk-cleanup-body-subtract'),
+    allowedOverlay: document.getElementById('chk-cleanup-allowed-overlay'),
+    forbiddenOverlay: document.getElementById('chk-cleanup-forbidden-overlay'),
+    brush: document.getElementById('range-cleanup-brush'),
+    zoom: document.getElementById('range-cleanup-zoom'),
+    zoomFit: document.getElementById('btn-cleanup-fit'),
+    eraser: document.getElementById('btn-cleanup-eraser'),
+    restore: document.getElementById('btn-cleanup-restore'),
+    undo: document.getElementById('btn-cleanup-undo'),
+    reset: document.getElementById('btn-cleanup-reset'),
+  };
+}
+
+function syncCleanupControlLabels() {
+  const c = cleanupControls();
+  const keyTol = document.getElementById('val-cleanup-key-tolerance');
+  const alpha = document.getElementById('val-cleanup-alpha-threshold');
+  const island = document.getElementById('val-cleanup-island-size');
+  const brush = document.getElementById('val-cleanup-brush');
+  const zoom = document.getElementById('val-cleanup-zoom');
+  if (keyTol && c.keyTol) keyTol.textContent = c.keyTol.value;
+  if (alpha && c.alpha) alpha.textContent = c.alpha.value;
+  if (island && c.islandSize) island.textContent = c.islandSize.value;
+  if (brush && c.brush) brush.textContent = c.brush.value;
+  if (zoom && c.zoom) zoom.textContent = c.zoom.value;
+}
+
+function applyCleanupZoom() {
+  const canvas = document.getElementById('cleanup-candidate-canvas');
+  const zoom = cleanupControls().zoom;
+  if (!canvas || !zoom) return;
+  const scale = parseInt(zoom.value || '100', 10) / 100;
+  canvas.style.width = `${Math.max(1, Math.round(canvas.width * scale))}px`;
+  canvas.style.height = `${Math.max(1, Math.round(canvas.height * scale))}px`;
+  syncCleanupControlLabels();
+}
+
+function fitCleanupZoom() {
+  const frame = document.querySelector('.cleanup-edit-frame');
+  const canvas = document.getElementById('cleanup-candidate-canvas');
+  const zoom = cleanupControls().zoom;
+  if (!frame || !canvas || !zoom) return;
+  const fit = Math.floor(Math.min(frame.clientWidth / canvas.width, frame.clientHeight / canvas.height) * 100);
+  zoom.value = String(Math.max(100, Math.min(800, fit || 100)));
+  applyCleanupZoom();
+}
+
+async function initCleanupWorkbenchForImage(image) {
+  const details = document.getElementById('details-cleanup-workbench');
+  const sourceCanvas = document.getElementById('cleanup-source-canvas');
+  const candidateCanvas = document.getElementById('cleanup-candidate-canvas');
+  if (!sourceCanvas || !candidateCanvas) return;
+
+  const w = image.naturalWidth || image.width;
+  const h = image.naturalHeight || image.height;
+  sourceCanvas.width = w;
+  sourceCanvas.height = h;
+  candidateCanvas.width = w;
+  candidateCanvas.height = h;
+  const sourceCtx = sourceCanvas.getContext('2d');
+  sourceCtx.clearRect(0, 0, w, h);
+  sourceCtx.drawImage(image, 0, 0, w, h);
+
+  cleanupState.initialized = true;
+  cleanupState.sourceCanvas = sourceCanvas;
+  cleanupState.sourceImageData = canvasImageData(sourceCanvas);
+  cleanupState.candidateCanvas = candidateCanvas;
+  cleanupState.candidateImageData = cloneCleanupImageData(cleanupState.sourceImageData);
+  cleanupState.manualMaskImageData = null;
+  cleanupState.undoStack = [];
+  cleanupState.manualEdits = 0;
+  cleanupState.operations = [];
+  cleanupState.sourceLane = cleanupControls().lane?.value || 'transparent_png';
+  cleanupState.activeMaskCache = {};
+
+  if (details) details.open = true;
+  putCanvasImageData(candidateCanvas, cleanupState.candidateImageData);
+  fitCleanupZoom();
+  await applyCleanupFromControls({ preserveManual: false });
+}
+
+async function setPendingAssetFromCleanup() {
+  if (!cleanupState.candidateCanvas || !cleanupState.candidateImageData) return;
+  putCanvasImageData(cleanupState.candidateCanvas, cleanupState.candidateImageData);
+  const blob = await canvasToBlob(cleanupState.candidateCanvas);
+  const file = new File([blob], pendingAssetFile?.name || 'cleaned_asset.png', { type: 'image/png' });
+  const url = URL.createObjectURL(blob);
+  const image = await loadImage(url);
+  setPendingAsset(file, image);
+  setPendingPreviewImage(null);
+  scheduleImportPreview();
+}
+
+async function applyCleanupFromControls({ preserveManual = true } = {}) {
+  if (!cleanupState.sourceImageData || !cleanupState.candidateCanvas) return;
+  const c = cleanupControls();
+  syncCleanupControlLabels();
+
+  const operations = [];
+  let img = cloneCleanupImageData(cleanupState.sourceImageData);
+  if (c.whiteBg?.checked) {
+    img = removeWhiteBackground(img, parseInt(c.keyTol?.value || '40', 10));
+    operations.push('remove_white_background');
+  }
+  if (c.colorKey?.checked) {
+    img = removeColorKey(img, parseHexColor(c.keyColor?.value || '#ffffff'), parseInt(c.keyTol?.value || '40', 10));
+    operations.push('color_key');
+  }
+  const alphaThreshold = parseInt(c.alpha?.value || '10', 10);
+  if (alphaThreshold > 10) {
+    img = applyAlphaThreshold(img, alphaThreshold);
+    operations.push('alpha_threshold');
+  }
+  if (c.halo?.checked) {
+    img = cleanupHalo(img);
+    operations.push('halo_cleanup');
+  }
+  if (c.largest?.checked) {
+    img = keepLargestConnectedComponent(img);
+    operations.push('keep_largest_connected_component');
+  }
+  if (c.islands?.checked) {
+    img = removeSmallIslands(img, parseInt(c.islandSize?.value || '32', 10));
+    operations.push('remove_small_islands');
+  }
+  if (c.bodySubtract?.checked) {
+    operations.push('body_subtraction_on_bake');
+  }
+
+  if (preserveManual && cleanupState.manualMaskImageData) {
+    img = applyManualMask(img, cleanupState.manualMaskImageData);
+  }
+
+  cleanupState.sourceLane = c.lane?.value || 'transparent_png';
+  cleanupState.operations = operations;
+  cleanupState.candidateImageData = img;
+  putCanvasImageData(cleanupState.candidateCanvas, img);
+  syncWorkbenchBodySubtract();
+  await setPendingAssetFromCleanup();
+  await renderCleanupBodyPreview();
+  await updateCleanupWarnings();
+}
+
+function applyManualMask(imageData, maskImageData) {
+  const out = cloneCleanupImageData(imageData);
+  for (let i = 0; i < out.data.length; i += 4) {
+    const mode = maskImageData.data[i];
+    if (mode === 1) {
+      out.data[i + 3] = 0;
+    } else if (mode === 2) {
+      out.data[i] = cleanupState.sourceImageData.data[i];
+      out.data[i + 1] = cleanupState.sourceImageData.data[i + 1];
+      out.data[i + 2] = cleanupState.sourceImageData.data[i + 2];
+      out.data[i + 3] = cleanupState.sourceImageData.data[i + 3];
+    }
+  }
+  return out;
+}
+
+function syncWorkbenchBodySubtract() {
+  const c = cleanupControls();
+  const existing = document.getElementById('chk-subtract-body');
+  if (existing && c.bodySubtract) {
+    existing.checked = c.bodySubtract.checked;
+    existing.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+
+async function renderCleanupBodyPreview() {
+  const preview = document.getElementById('cleanup-body-preview-canvas');
+  if (!preview || !cleanupState.candidateCanvas) return;
+  const docW = DOLL_CONFIG.canvas?.width || 768;
+  const docH = DOLL_CONFIG.canvas?.height || 768;
+  preview.width = docW;
+  preview.height = docH;
+  const ctx = preview.getContext('2d');
+  ctx.clearRect(0, 0, docW, docH);
+  try {
+    const refCanvas = await generateDynamicBodyReferenceCanvas();
+    ctx.globalAlpha = 0.42;
+    ctx.drawImage(refCanvas, 0, 0, docW, docH);
+    ctx.globalAlpha = 1;
+  } catch (err) {
+    console.warn('cleanup preview body reference failed:', err);
+  }
+  applyBakeTransform(ctx, cleanupState.candidateCanvas, docW, docH, alignSettings);
+  await drawCleanupMaskOverlays(ctx, docW, docH);
+}
+
+function maskPathForCategory(category) {
+  const cat = category === 'shoes' ? 'shoe' : category;
+  return `base_rig/masks/${cat}_allowed_region.png`;
+}
+
+async function loadMaskCanvas(cacheKey, path, width, height) {
+  const cached = cleanupState.activeMaskCache[cacheKey];
+  if (cached && cached.width === width && cached.height === height) return cached;
+  const img = await loadImage(path);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+  cleanupState.activeMaskCache[cacheKey] = canvas;
+  return canvas;
+}
+
+async function drawCleanupMaskOverlays(ctx, docW, docH) {
+  const c = cleanupControls();
+  const slot = document.getElementById('select-ingest-slot')?.value || 'topwear';
+  if (c.allowedOverlay?.checked) {
+    try {
+      const mask = await loadMaskCanvas(`allowed:${slot}`, maskPathForCategory(slot), docW, docH);
+      tintMask(ctx, mask, 'rgba(46, 213, 115, 0.24)');
+    } catch {}
+  }
+  if (c.forbiddenOverlay?.checked) {
+    for (const name of ['face_forbidden_region', 'hair_forbidden_region']) {
+      try {
+        const mask = await loadMaskCanvas(`forbidden:${name}`, `base_rig/masks/${name}.png`, docW, docH);
+        tintMask(ctx, mask, 'rgba(255, 71, 87, 0.28)');
+      } catch {}
+    }
+  }
+}
+
+function tintMask(ctx, maskCanvas, color) {
+  const tmp = document.createElement('canvas');
+  tmp.width = maskCanvas.width;
+  tmp.height = maskCanvas.height;
+  const tctx = tmp.getContext('2d');
+  tctx.fillStyle = color;
+  tctx.fillRect(0, 0, tmp.width, tmp.height);
+  tctx.globalCompositeOperation = 'destination-in';
+  tctx.drawImage(maskCanvas, 0, 0);
+  ctx.drawImage(tmp, 0, 0);
+}
+
+async function updateCleanupWarnings() {
+  const el = document.getElementById('cleanup-warnings');
+  if (!el || !cleanupState.candidateImageData) return;
+  const warnings = [];
+  const sourceStats = getCleanupAlphaStats(cleanupState.sourceImageData);
+  const stats = getCleanupAlphaStats(cleanupState.candidateImageData);
+  if (sourceStats.coverage > 0.98) warnings.push('Source appears to have no useful alpha channel.');
+  if (stats.coverage < 0.002 || stats.opaquePixels < 128) warnings.push('Asset is nearly empty after cleanup.');
+  if (stats.coverage > 0.92) warnings.push('Likely opaque background remains.');
+
+  const docCanvas = document.createElement('canvas');
+  const docW = DOLL_CONFIG.canvas?.width || 768;
+  const docH = DOLL_CONFIG.canvas?.height || 768;
+  docCanvas.width = docW;
+  docCanvas.height = docH;
+  applyBakeTransform(docCanvas.getContext('2d'), cleanupState.candidateCanvas, docW, docH, alignSettings);
+  const docData = canvasImageData(docCanvas);
+  const docStats = getCleanupAlphaStats(docData);
+  const slot = document.getElementById('select-ingest-slot')?.value || 'topwear';
+  if (docStats.bbox) {
+    const ratio = (docStats.bbox.width * docStats.bbox.height) / (docW * docH);
+    if (ratio < 0.01) warnings.push('Asset may be too small for the selected category.');
+    if (ratio > 0.9) warnings.push('Asset may be too large for the selected category.');
+  }
+
+  try {
+    const allowed = await loadMaskCanvas(`allowed:${slot}`, maskPathForCategory(slot), docW, docH);
+    const allowedData = canvasImageData(allowed);
+    const allowedOverlap = countVisibleMaskOverlap(docData, allowedData);
+    if (allowedOverlap.visible > 0 && allowedOverlap.overlap / allowedOverlap.visible < 0.85) {
+      warnings.push('Visible pixels likely extend outside the allowed region.');
+    }
+  } catch {}
+
+  for (const name of ['face_forbidden_region', 'hair_forbidden_region']) {
+    try {
+      const forbidden = await loadMaskCanvas(`forbidden:${name}`, `base_rig/masks/${name}.png`, docW, docH);
+      const forbiddenOverlap = countVisibleMaskOverlap(docData, canvasImageData(forbidden));
+      if (forbiddenOverlap.overlap > 20) warnings.push('Visible pixels overlap a forbidden face/hair region.');
+    } catch {}
+  }
+
+  if (warnings.length === 0) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  el.style.display = 'block';
+  el.textContent = '';
+  const ul = document.createElement('ul');
+  for (const warning of warnings) {
+    const li = document.createElement('li');
+    li.textContent = warning;
+    ul.appendChild(li);
+  }
+  el.appendChild(ul);
+}
+
+function canvasPointerCoords(canvas, e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: Math.round((e.clientX - rect.left) * canvas.width / rect.width),
+    y: Math.round((e.clientY - rect.top) * canvas.height / rect.height),
+  };
+}
+
+function applyCleanupBrushStroke(x, y) {
+  if (!cleanupState.candidateImageData || !cleanupState.sourceImageData) return;
+  if (!cleanupState.manualMaskImageData) {
+    cleanupState.manualMaskImageData = new ImageData(cleanupState.candidateImageData.width, cleanupState.candidateImageData.height);
+  }
+  const c = cleanupControls();
+  const radius = parseInt(c.brush?.value || '18', 10);
+  const mode = cleanupState.brushTool === 'restore' ? 2 : 1;
+  const { width, height } = cleanupState.candidateImageData;
+  const r2 = radius * radius;
+  for (let yy = Math.max(0, y - radius); yy <= Math.min(height - 1, y + radius); yy++) {
+    for (let xx = Math.max(0, x - radius); xx <= Math.min(width - 1, x + radius); xx++) {
+      const dx = xx - x;
+      const dy = yy - y;
+      if (dx * dx + dy * dy > r2) continue;
+      const i = (yy * width + xx) * 4;
+      cleanupState.manualMaskImageData.data[i] = mode;
+      if (mode === 1) {
+        cleanupState.candidateImageData.data[i + 3] = 0;
+      } else {
+        cleanupState.candidateImageData.data[i] = cleanupState.sourceImageData.data[i];
+        cleanupState.candidateImageData.data[i + 1] = cleanupState.sourceImageData.data[i + 1];
+        cleanupState.candidateImageData.data[i + 2] = cleanupState.sourceImageData.data[i + 2];
+        cleanupState.candidateImageData.data[i + 3] = cleanupState.sourceImageData.data[i + 3];
+      }
+    }
+  }
+  putCanvasImageData(cleanupState.candidateCanvas, cleanupState.candidateImageData);
+}
+
+async function finishCleanupBrushStroke() {
+  cleanupState.manualEdits++;
+  await setPendingAssetFromCleanup();
+  await renderCleanupBodyPreview();
+  await updateCleanupWarnings();
+}
+
+function wireCleanupWorkbench() {
+  const c = cleanupControls();
+  const allControls = [
+    c.lane, c.whiteBg, c.colorKey, c.keyColor, c.keyTol, c.alpha, c.halo,
+    c.largest, c.islands, c.islandSize, c.bodySubtract, c.allowedOverlay,
+    c.forbiddenOverlay,
+  ].filter(Boolean);
+  for (const control of allControls) {
+    control.addEventListener('input', () => applyCleanupFromControls());
+    control.addEventListener('change', () => applyCleanupFromControls());
+  }
+
+  if (c.lane) {
+    c.lane.addEventListener('change', () => {
+      const lane = c.lane.value;
+      if (lane === 'white_background' && c.whiteBg) c.whiteBg.checked = true;
+      if (lane === 'clothed_guide') {
+        if (c.bodySubtract) c.bodySubtract.checked = true;
+        if (c.allowedOverlay) c.allowedOverlay.checked = true;
+        if (c.forbiddenOverlay) c.forbiddenOverlay.checked = true;
+      }
+      applyCleanupFromControls({ preserveManual: false });
+    });
+  }
+
+  if (c.brush) {
+    c.brush.addEventListener('input', syncCleanupControlLabels);
+  }
+  if (c.zoom) {
+    c.zoom.addEventListener('input', applyCleanupZoom);
+  }
+  if (c.zoomFit) {
+    c.zoomFit.addEventListener('click', fitCleanupZoom);
+  }
+  if (c.eraser) {
+    c.eraser.addEventListener('click', () => {
+      cleanupState.brushTool = 'erase';
+      c.eraser.classList.add('active');
+      c.restore?.classList.remove('active');
+    });
+  }
+  if (c.restore) {
+    c.restore.addEventListener('click', () => {
+      cleanupState.brushTool = 'restore';
+      c.restore.classList.add('active');
+      c.eraser?.classList.remove('active');
+    });
+  }
+  if (c.undo) {
+    c.undo.addEventListener('click', async () => {
+      const snap = cleanupState.undoStack.pop();
+      if (!snap) return;
+      cleanupState.candidateImageData = snap.candidate;
+      cleanupState.manualMaskImageData = snap.manualMask;
+      cleanupState.manualEdits = Math.max(0, cleanupState.manualEdits - 1);
+      putCanvasImageData(cleanupState.candidateCanvas, cleanupState.candidateImageData);
+      await setPendingAssetFromCleanup();
+      await renderCleanupBodyPreview();
+      await updateCleanupWarnings();
+    });
+  }
+  if (c.reset) {
+    c.reset.addEventListener('click', () => {
+      cleanupState.manualMaskImageData = null;
+      cleanupState.manualEdits = 0;
+      cleanupState.undoStack = [];
+      applyCleanupFromControls({ preserveManual: false });
+    });
+  }
+
+  const candidateCanvas = document.getElementById('cleanup-candidate-canvas');
+  if (candidateCanvas) {
+    candidateCanvas.addEventListener('mousedown', (e) => {
+      if (!cleanupState.candidateImageData) return;
+      cleanupState.brushDown = true;
+      cleanupState.undoStack.push({
+        candidate: cloneCleanupImageData(cleanupState.candidateImageData),
+        manualMask: cleanupState.manualMaskImageData ? cloneCleanupImageData(cleanupState.manualMaskImageData) : null,
+      });
+      const p = canvasPointerCoords(candidateCanvas, e);
+      applyCleanupBrushStroke(p.x, p.y);
+      e.preventDefault();
+    });
+    candidateCanvas.addEventListener('mousemove', (e) => {
+      if (!cleanupState.brushDown) return;
+      const p = canvasPointerCoords(candidateCanvas, e);
+      applyCleanupBrushStroke(p.x, p.y);
+      e.preventDefault();
+    });
+    window.addEventListener('mouseup', () => {
+      if (!cleanupState.brushDown) return;
+      cleanupState.brushDown = false;
+      finishCleanupBrushStroke();
+    });
+  }
+  syncCleanupControlLabels();
+}
+
+// Compose AI-cached or raw source. Chroma-only previews stay as source-space
+// drawables; body subtraction is a canvas-space operation, so that preview is
+// pre-baked and marked to bypass a second alignment transform in renderDoll.
+async function _composePreviewSource() {
+  if (!pendingAssetImage) return null;
+  const docW = DOLL_CONFIG.canvas?.width || 768;
+  const docH = DOLL_CONFIG.canvas?.height || 768;
+
+  const aiMode = _currentAIMode();
+  let source = pendingAssetImage;
+  if (aiMode !== 'off') {
+    try {
+      const aiImg = await ensureAIProcessed(aiMode);
+      if (aiImg) source = aiImg;
+    } catch (e) {
+      console.warn('ai-process failed, using raw source:', e);
+    }
+  }
+
+  if (_subtractEnabled()) {
+    const bakedCanvas = document.createElement('canvas');
+    bakedCanvas.width = docW;
+    bakedCanvas.height = docH;
+    const bakedCtx = bakedCanvas.getContext('2d');
+    applyBakeTransform(bakedCtx, source, docW, docH, alignSettings);
+    if (_chromaKeyEnabled()) {
+      const keyColor = document.getElementById('color-chromakey')?.value || '#ffffff';
+      const tolerance = parseInt(document.getElementById('range-chromakey')?.value || '40', 10);
+      applyChromaKey(bakedCanvas, keyColor, tolerance);
+    }
+    await applyBodySubtractionToCanvas(bakedCanvas);
+    return { image: bakedCanvas, baked: true };
+  }
+
+  // Apply chroma key on top of whatever source we have (raw or AI-cleaned).
+  // The overlay's applyBakeTransform handles the alignSettings positioning,
+  // so here we work at the source's native pixel dimensions.
+  if (_chromaKeyEnabled()) {
+    const canvas = document.createElement('canvas');
+    canvas.width = source.naturalWidth || source.width;
+    canvas.height = source.naturalHeight || source.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(source, 0, 0);
+    const keyColor = document.getElementById('color-chromakey')?.value || '#ffffff';
+    const tolerance = parseInt(document.getElementById('range-chromakey')?.value || '40', 10);
+    applyChromaKey(canvas, keyColor, tolerance);
+    source = canvas;
+  }
+  return { image: source, baked: false };
+}
+
+async function renderImportPreview() {
+  if (!livePreviewTargetContainer) return;
+  if (!pendingAssetImage) {
+    setPendingPreviewImage(null);
+    updatePreviewPipelineStatus(false);
+    renderDoll(livePreviewTargetContainer);
+    return;
+  }
+  try {
+    updatePreviewPipelineStatus(true);
+    const composed = await _composePreviewSource();
+    setPendingPreviewImage(composed.image, { baked: composed.baked });
+    updatePreviewPipelineStatus(false);
+    renderDoll(livePreviewTargetContainer);
+  } catch (e) {
+    updatePreviewPipelineStatus(false);
+    console.warn('preview render failed:', e);
+  }
+}
+
+function scheduleImportPreview() {
+  if (livePreviewRendering) {
+    livePreviewDirty = true;
+    return;
+  }
+  if (livePreviewScheduled) return;
+  livePreviewScheduled = true;
+  requestAnimationFrame(async () => {
+    livePreviewScheduled = false;
+    livePreviewRendering = true;
+    try {
+      await renderImportPreview();
+    } finally {
+      livePreviewRendering = false;
+      if (livePreviewDirty) {
+        livePreviewDirty = false;
+        scheduleImportPreview();
+      }
+    }
+  });
+}
+
+function _invalidateAICache() {
+  if (aiProcessedCache?.objectUrl) URL.revokeObjectURL(aiProcessedCache.objectUrl);
+  aiProcessedCache = null;
+  const status = document.getElementById('ai-isolation-status');
+  if (status) status.style.display = 'none';
+  updatePreviewPipelineStatus(false);
+}
+
 export function initImport(targetContainer) {
+  livePreviewTargetContainer = targetContainer;
   wirePSDImport(targetContainer);
   wireRigAutodetect();
   wireAssetIngest(targetContainer);
@@ -23,6 +815,34 @@ export function initImport(targetContainer) {
   wireDragDrop(targetContainer);
   wireAlignment(targetContainer);
   wireAutoAlign(targetContainer);
+  wireLivePreviewTriggers();
+  wireCleanupWorkbench();
+}
+
+function wireLivePreviewTriggers() {
+  const aiSelect = document.getElementById('select-ai-isolation');
+  if (aiSelect) {
+    aiSelect.addEventListener('change', () => {
+      const status = document.getElementById('ai-isolation-status');
+      if (status) status.style.display = 'none';
+      updatePreviewPipelineStatus(false);
+      scheduleImportPreview();
+    });
+  }
+  const chromaToggle = document.getElementById('chk-chromakey');
+  const chromaColor = document.getElementById('color-chromakey');
+  const chromaTol = document.getElementById('range-chromakey');
+  [chromaToggle, chromaColor, chromaTol].forEach(el => {
+    if (el) el.addEventListener('input', scheduleImportPreview);
+    if (el) el.addEventListener('change', scheduleImportPreview);
+  });
+  const subToggle = document.getElementById('chk-subtract-body');
+  const subTol = document.getElementById('range-subtract-tolerance');
+  [subToggle, subTol].forEach(el => {
+    if (el) el.addEventListener('input', scheduleImportPreview);
+    if (el) el.addEventListener('change', scheduleImportPreview);
+  });
+  updatePreviewPipelineStatus(false);
 }
 
 function wireRigAutodetect() {
@@ -362,11 +1182,13 @@ function wireAssetIngest(targetContainer) {
 
 async function handleAssetFileSelect(file, targetContainer) {
   clearFitPreview();
+  _invalidateAICache();
   const assetDropText = document.getElementById('asset-drop-text');
   const txtIngestName = document.getElementById('txt-ingest-name');
   const btnIngestSubmit = document.getElementById('btn-ingest-submit');
 
   setPendingAsset(file, null);
+  setPendingPreviewImage(null);
   assetDropText.innerHTML = `Selected: <strong>${file.name}</strong> <span class="browse-link" style="margin-left: 8px; font-weight: normal; font-size: 0.75rem;">(Change)</span>`;
 
   if (!txtIngestName.value) {
@@ -392,8 +1214,11 @@ async function handleAssetFileSelect(file, targetContainer) {
     const detailsAlign = document.getElementById('details-alignment');
     if (detailsAlign) detailsAlign.open = true;
 
+    await initCleanupWorkbenchForImage(img);
+
     renderDoll(targetContainer);
     if (typeof updateAlignUI === 'function') updateAlignUI();
+    scheduleImportPreview();
   } catch (e) {
     console.warn("Could not load garment image:", e);
   }
@@ -415,6 +1240,8 @@ async function processIngest(targetContainer, assetDropText, txtIngestName) {
   const displayName = txtIngestName.value.trim() || 'Custom Option';
   const cleanName = `${slot}_${displayName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')}`;
   const filename = `${cleanName}.png`;
+  const cleanupMetadata = getCleanupMetadata();
+  const cleanupPreparedSource = cleanupHasEdits();
 
   btnIngestSubmit.setAttribute('disabled', 'true');
   btnIngestSubmit.textContent = 'Processing asset...';
@@ -428,13 +1255,27 @@ async function processIngest(targetContainer, assetDropText, txtIngestName) {
     origCanvas.height = docHeight;
     const origCtx = origCanvas.getContext('2d');
 
-    const fileUrl = URL.createObjectURL(pendingAssetFile);
-    const originalImg = await loadImage(fileUrl);
+    // If the user has an AI mode selected, use the cached AI-processed image
+    // as the bake source instead of the raw file. This is the on-disk garment
+    // PNG the wardrobe will keep.
+    let originalImg;
+    const aiMode = _currentAIMode();
+    if (aiMode !== 'off') {
+      try {
+        originalImg = await ensureAIProcessed(aiMode);
+      } catch (e) {
+        console.warn('ai-process failed at bake, falling back to raw:', e);
+      }
+    }
+    if (!originalImg) {
+      const fileUrl = URL.createObjectURL(pendingAssetFile);
+      originalImg = await loadImage(fileUrl);
+    }
 
     applyBakeTransform(origCtx, originalImg, docWidth, docHeight, alignSettings);
 
     const chkChroma = document.getElementById('chk-chromakey');
-    if (chkChroma && chkChroma.checked) {
+    if (!cleanupPreparedSource && chkChroma && chkChroma.checked) {
       const keyColor = document.getElementById('color-chromakey').value;
       const tolerance = parseInt(document.getElementById('range-chromakey').value, 10);
       applyChromaKey(origCanvas, keyColor, tolerance);
@@ -443,73 +1284,7 @@ async function processIngest(targetContainer, assetDropText, txtIngestName) {
     const chkSubtract = document.getElementById('chk-subtract-body');
     if (chkSubtract && chkSubtract.checked) {
       try {
-        const refCanvas = await generateDynamicBodyReferenceCanvas();
-
-        const scaledRefCanvas = document.createElement('canvas');
-        scaledRefCanvas.width = origCanvas.width;
-        scaledRefCanvas.height = origCanvas.height;
-        const scaledRefCtx = scaledRefCanvas.getContext('2d');
-        scaledRefCtx.drawImage(refCanvas, 0, 0, origCanvas.width, origCanvas.height);
-
-        const origData = origCtx.getImageData(0, 0, origCanvas.width, origCanvas.height);
-        const pixels = origData.data;
-        const refData = scaledRefCtx.getImageData(0, 0, scaledRefCanvas.width, scaledRefCanvas.height).data;
-
-        const width = origCanvas.width;
-        const height = origCanvas.height;
-        const dist = new Int32Array(width * height);
-        const nearestIdx = new Int32Array(width * height);
-        const maxDist = 999999;
-
-        for (let i = 0; i < width * height; i++) {
-          if (refData[i * 4 + 3] > 10) { dist[i] = 0; nearestIdx[i] = i; }
-          else { dist[i] = maxDist; nearestIdx[i] = -1; }
-        }
-
-        for (let y = 0; y < height; y++) {
-          for (let x = 0; x < width; x++) {
-            const idx = y * width + x;
-            if (dist[idx] > 0) {
-              let d = dist[idx], n = nearestIdx[idx];
-              if (x > 0 && dist[idx - 1] + 1 < d) { d = dist[idx - 1] + 1; n = nearestIdx[idx - 1]; }
-              if (y > 0 && dist[idx - width] + 1 < d) { d = dist[idx - width] + 1; n = nearestIdx[idx - width]; }
-              dist[idx] = d; nearestIdx[idx] = n;
-            }
-          }
-        }
-
-        for (let y = height - 1; y >= 0; y--) {
-          for (let x = width - 1; x >= 0; x--) {
-            const idx = y * width + x;
-            if (dist[idx] > 0) {
-              let d = dist[idx], n = nearestIdx[idx];
-              if (x < width - 1 && dist[idx + 1] + 1 < d) { d = dist[idx + 1] + 1; n = nearestIdx[idx + 1]; }
-              if (y < height - 1 && dist[idx + width] + 1 < d) { d = dist[idx + width] + 1; n = nearestIdx[idx + width]; }
-              dist[idx] = d; nearestIdx[idx] = n;
-            }
-          }
-        }
-
-        const tol = parseInt(document.getElementById('range-subtract-tolerance').value, 10);
-        const maxSearchRadius = 15;
-
-        for (let i = 0; i < pixels.length; i += 4) {
-          const a = pixels[i + 3];
-          if (a > 0) {
-            const pixelIdx = i / 4;
-            const d = dist[pixelIdx];
-            if (d <= maxSearchRadius) {
-              const nIdx = nearestIdx[pixelIdx];
-              if (nIdx >= 0) {
-                const diff = Math.abs(pixels[i] - refData[nIdx * 4]) +
-                             Math.abs(pixels[i + 1] - refData[nIdx * 4 + 1]) +
-                             Math.abs(pixels[i + 2] - refData[nIdx * 4 + 2]);
-                if (diff < tol) pixels[i + 3] = 0;
-              }
-            }
-          }
-        }
-        origCtx.putImageData(origData, 0, 0);
+        await applyBodySubtractionToCanvas(origCanvas);
       } catch (refErr) {
         console.warn('Failed to subtract reference body:', refErr);
         alert('Could not generate dynamic body reference for clothing isolation. Proceeding without subtraction.');
@@ -537,10 +1312,18 @@ async function processIngest(targetContainer, assetDropText, txtIngestName) {
       subcategory: slot,
       optionValue: cleanName,
     };
+    if (cleanupMetadata) {
+      newLayer.cleanup = cleanupMetadata;
+    }
 
     const existingLayerIndex = DOLL_CONFIG.layers.findIndex(l => l.id === cleanName);
     if (existingLayerIndex >= 0) {
-      DOLL_CONFIG.layers[existingLayerIndex] = { ...DOLL_CONFIG.layers[existingLayerIndex], name: displayName, file: filename };
+      DOLL_CONFIG.layers[existingLayerIndex] = {
+        ...DOLL_CONFIG.layers[existingLayerIndex],
+        name: displayName,
+        file: filename,
+        ...(cleanupMetadata ? { cleanup: cleanupMetadata } : {}),
+      };
     } else {
       DOLL_CONFIG.layers.push(newLayer);
     }
@@ -565,6 +1348,9 @@ async function processIngest(targetContainer, assetDropText, txtIngestName) {
     }
 
     state.wardrobe[slot] = cleanName;
+
+    setPendingPreviewImage(null);
+    _invalidateAICache();
 
     buildUI(targetContainer);
     renderDoll(targetContainer);
@@ -710,7 +1496,14 @@ export function updateAlignUI() {
     const ctx = overlay.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
-    applyBakeTransform(ctx, pendingAssetImage, overlay.width, overlay.height, alignSettings);
+    // Honor the preview override if the importer has staged a masked source.
+    const source = pendingPreviewImage || pendingAssetImage;
+    if (pendingPreviewImage && pendingPreviewIsBaked) {
+      ctx.drawImage(source, 0, 0, overlay.width, overlay.height);
+      scheduleImportPreview();
+    } else {
+      applyBakeTransform(ctx, source, overlay.width, overlay.height, alignSettings);
+    }
     overlay.style.opacity = alignSettings.opacity / 100;
   }
 }

@@ -270,7 +270,7 @@
             </details>
 
             <!-- Ingest Wardrobe Asset section -->
-            <div class="control-group">
+            <div class="control-group ingest-workflow">
               <h3>👘 Ingest Wardrobe Asset</h3>
               <p class="group-desc" style="margin-bottom: 0.6rem;">Drop a clothing texture here. It will be aligned to the character, cropped, and added as a new wardrobe option.</p>
 
@@ -312,8 +312,90 @@
                 <input type="file" id="input-asset" accept="image/*" style="display: none;">
               </div>
 
+              <details class="control-group cleanup-workbench" id="details-cleanup-workbench" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+                <summary style="cursor: pointer; font-weight: 600; font-size: 0.75rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                  <span>🧼 Cleanup / Extraction Workbench</span>
+                  <span class="details-toggle-icon" style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
+                </summary>
+                <div style="margin-top: 0.6rem;">
+                  <div class="cleanup-preview-grid">
+                    <div class="cleanup-preview-tile">
+                      <span>Source</span>
+                      <canvas id="cleanup-source-canvas" width="160" height="160"></canvas>
+                    </div>
+                    <div class="cleanup-preview-tile cleanup-edit-tile">
+                      <span>Cleaned</span>
+                      <div class="cleanup-edit-frame">
+                        <canvas id="cleanup-candidate-canvas" width="160" height="160"></canvas>
+                      </div>
+                    </div>
+                    <div class="cleanup-preview-tile">
+                      <span>On Body</span>
+                      <canvas id="cleanup-body-preview-canvas" width="160" height="160"></canvas>
+                    </div>
+                  </div>
+
+                  <label for="select-cleanup-lane" style="font-size: 0.68rem; color: var(--text-secondary); display: block; margin: 0.55rem 0 0.2rem;">Source lane</label>
+                  <select id="select-cleanup-lane" style="width: 100%; padding: 0.4rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">
+                    <option value="transparent_png">Lane A: transparent compatible PNG</option>
+                    <option value="white_background">Lane B: white-background compatible asset</option>
+                    <option value="clothed_guide">Lane C: clothed guide output, assisted only</option>
+                  </select>
+
+                  <div class="cleanup-toggle-grid">
+                    <label class="switch-item"><span class="switch-label">Remove white background</span><input type="checkbox" id="chk-cleanup-white-bg"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Color key removal</span><input type="checkbox" id="chk-cleanup-color-key"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Halo cleanup</span><input type="checkbox" id="chk-cleanup-halo"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Keep largest component</span><input type="checkbox" id="chk-cleanup-largest"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Remove small islands</span><input type="checkbox" id="chk-cleanup-islands"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Body subtraction</span><input type="checkbox" id="chk-cleanup-body-subtract"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Allowed mask overlay</span><input type="checkbox" id="chk-cleanup-allowed-overlay"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label">Forbidden mask overlay</span><input type="checkbox" id="chk-cleanup-forbidden-overlay"><span class="slider"></span></label>
+                  </div>
+
+                  <div class="cleanup-control-grid">
+                    <div class="align-control">
+                      <label for="color-cleanup-key">Key color</label>
+                      <input type="color" id="color-cleanup-key" value="#ffffff">
+                    </div>
+                    <div class="align-control">
+                      <label for="range-cleanup-key-tolerance">Key tol <span id="val-cleanup-key-tolerance">40</span></label>
+                      <input type="range" id="range-cleanup-key-tolerance" min="0" max="180" value="40">
+                    </div>
+                    <div class="align-control">
+                      <label for="range-cleanup-alpha-threshold">Alpha <span id="val-cleanup-alpha-threshold">10</span></label>
+                      <input type="range" id="range-cleanup-alpha-threshold" min="0" max="255" value="10">
+                    </div>
+                    <div class="align-control">
+                      <label for="range-cleanup-island-size">Island px <span id="val-cleanup-island-size">32</span></label>
+                      <input type="range" id="range-cleanup-island-size" min="1" max="256" value="32">
+                    </div>
+                  </div>
+
+                  <div class="cleanup-brush-row">
+                    <button type="button" class="cleanup-tool-btn active" id="btn-cleanup-eraser">Eraser</button>
+                    <button type="button" class="cleanup-tool-btn" id="btn-cleanup-restore">Restore</button>
+                    <label for="range-cleanup-brush">Brush <span id="val-cleanup-brush">18</span></label>
+                    <input type="range" id="range-cleanup-brush" min="2" max="96" value="18">
+                  </div>
+
+                  <div class="cleanup-zoom-row">
+                    <button type="button" class="cleanup-tool-btn" id="btn-cleanup-fit">Fit</button>
+                    <label for="range-cleanup-zoom">Zoom <span id="val-cleanup-zoom">100</span>%</label>
+                    <input type="range" id="range-cleanup-zoom" min="100" max="800" step="25" value="100">
+                  </div>
+
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
+                    <button type="button" class="action-btn secondary" id="btn-cleanup-undo" style="font-size: 0.7rem; padding: 0.35rem 0;">Undo Stroke</button>
+                    <button type="button" class="action-btn" id="btn-cleanup-reset" style="font-size: 0.7rem; padding: 0.35rem 0;">Reset Cleanup</button>
+                  </div>
+
+                  <div id="cleanup-warnings" class="status-box cleanup-warnings" style="display: none; margin-top: 0.5rem; padding: 0.45rem; font-size: 0.68rem;"></div>
+                </div>
+              </details>
+
               <!-- Visual Alignment Adjuster -->
-              <details class="control-group" id="details-alignment" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+              <details class="control-group alignment-card" id="details-alignment" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
                 <summary style="cursor: pointer; font-weight: 600; font-size: 0.75rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
                   <span>📐 Interactive Alignment Adjuster</span>
                   <span class="details-toggle-icon" style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
@@ -356,45 +438,45 @@
                     <strong>Tip:</strong> Drag to position, wheel to scale uniformly, arrow keys to nudge (Shift = 10px). Scale X/Y are independent — handy when a garment is slightly too narrow or tall.
                   </p>
 
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
-                    <div>
+                  <div class="align-control-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
+                    <div class="align-control">
                       <label for="range-align-x" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Offset X: <span id="val-align-x">0</span>px</label>
                       <input type="range" id="range-align-x" min="-200" max="200" value="0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                     </div>
-                    <div>
+                    <div class="align-control">
                       <label for="range-align-y" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Offset Y: <span id="val-align-y">0</span>px</label>
                       <input type="range" id="range-align-y" min="-200" max="200" value="0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                     </div>
                   </div>
 
-                  <div style="margin-bottom: 0.4rem;">
+                  <div class="align-control" style="margin-bottom: 0.4rem;">
                     <label for="range-align-scale" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Scale (uniform): <span id="val-align-scale">1.00</span>x</label>
                     <input type="range" id="range-align-scale" min="0.05" max="5.0" step="0.01" value="1.0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                   </div>
 
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
-                    <div>
+                  <div class="align-control-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
+                    <div class="align-control">
                       <label for="range-align-scale-x" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Scale X: <span id="val-align-scale-x">1.00</span>x</label>
                       <input type="range" id="range-align-scale-x" min="0.05" max="5.0" step="0.01" value="1.0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                     </div>
-                    <div>
+                    <div class="align-control">
                       <label for="range-align-scale-y" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Scale Y: <span id="val-align-scale-y">1.00</span>x</label>
                       <input type="range" id="range-align-scale-y" min="0.05" max="5.0" step="0.01" value="1.0" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                     </div>
                   </div>
 
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
-                    <div>
+                  <div class="align-control-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.4rem;">
+                    <div class="align-control">
                       <label for="num-align-width" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Width (px)</label>
                       <input type="number" id="num-align-width" min="1" max="4096" step="1" value="768" style="width: 100%; font-size: 0.7rem; padding: 0.2rem 0.3rem; background: var(--bg-secondary); border: 1px solid var(--border-glass); border-radius: 4px; color: var(--text-primary);">
                     </div>
-                    <div>
+                    <div class="align-control">
                       <label for="num-align-height" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Height (px)</label>
                       <input type="number" id="num-align-height" min="1" max="4096" step="1" value="768" style="width: 100%; font-size: 0.7rem; padding: 0.2rem 0.3rem; background: var(--bg-secondary); border: 1px solid var(--border-glass); border-radius: 4px; color: var(--text-primary);">
                     </div>
                   </div>
 
-                  <div>
+                  <div class="align-control">
                     <label for="range-align-opacity" style="font-size: 0.62rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Overlay Opacity: <span id="val-align-opacity">50</span>%</label>
                     <input type="range" id="range-align-opacity" min="0" max="100" value="50" style="width: 100%; height: 3px; background: var(--bg-secondary); cursor: pointer;">
                   </div>
@@ -406,7 +488,20 @@
               </details>
 
               <!-- BG removal options -->
-              <div class="bg-options-box" style="margin-top: 0.6rem; background: rgba(0,0,0,0.1); padding: 0.6rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+              <div class="bg-options-box processing-card" style="margin-top: 0.6rem; background: rgba(0,0,0,0.1); padding: 0.6rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+                <div id="preview-pipeline-status" class="preview-pipeline" aria-live="polite"></div>
+                <div style="display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.5rem;">
+                  <span style="font-size: 0.72rem; color: var(--text-primary);">🤖 AI Isolation</span>
+                  <select id="select-ai-isolation" style="width: 100%; padding: 0.35rem 0.4rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">
+                    <option value="off">Off — use Color Key / Subtract Body manually</option>
+                    <option value="bg-remove">AI Background Removal (u2net)</option>
+                    <option value="clothing-isolate" disabled>AI Clothing Isolation (disabled for now)</option>
+                  </select>
+                  <div id="ai-isolation-status" style="font-size: 0.62rem; color: var(--text-secondary); display: none;"></div>
+                </div>
+
+                <div class="divider" style="margin: 0.4rem 0;"></div>
+
                 <label class="switch-item" style="margin-bottom: 0.4rem;">
                   <span class="switch-label" style="font-size: 0.72rem;">Instant Color Key Background Removal</span>
                   <input type="checkbox" id="chk-chromakey" checked>

@@ -14,14 +14,28 @@ export const alignSettings = {
   opacity: 50
 };
 
+// Optional override: when set, renderDoll's pending overlay draws THIS image
+// instead of pendingAssetImage. Used by the importer's live preview to show
+// the chroma-keyed / body-subtracted / AI-cleaned result without fighting
+// renderDoll's normal rendering path.
+export let pendingPreviewImage = null;
+export let pendingPreviewIsBaked = false;
+
 export function setPendingAsset(file, image) {
   pendingAssetFile = file;
   pendingAssetImage = image;
 }
 
+export function setPendingPreviewImage(image, options = {}) {
+  pendingPreviewImage = image;
+  pendingPreviewIsBaked = !!options.baked;
+}
+
 export function clearPendingAsset() {
   pendingAssetFile = null;
   pendingAssetImage = null;
+  pendingPreviewImage = null;
+  pendingPreviewIsBaked = false;
 }
 
 export function clearImageCache() {
@@ -94,7 +108,13 @@ export function renderDoll(targetContainer) {
     overlay.style.zIndex = 300;
     overlay.style.opacity = alignSettings.opacity / 100;
     overlay.style.pointerEvents = 'none';
-    applyBakeTransform(overlay.getContext('2d'), pendingAssetImage, docW, docH, alignSettings);
+    const source = pendingPreviewImage || pendingAssetImage;
+    const ctx = overlay.getContext('2d');
+    if (pendingPreviewImage && pendingPreviewIsBaked) {
+      ctx.drawImage(source, 0, 0, docW, docH);
+    } else {
+      applyBakeTransform(ctx, source, docW, docH, alignSettings);
+    }
     targetContainer.appendChild(overlay);
   }
 }

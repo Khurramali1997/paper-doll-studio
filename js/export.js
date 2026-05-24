@@ -241,7 +241,7 @@ export async function exportZIP(onProgress) {
       }
     }
     // Add JS modules
-    const moduleFiles = ['js/utils.js', 'js/state.js', 'js/render.js', 'js/wardrobe.js', 'js/calibration.js', 'js/import.js', 'js/export.js', 'app.js'];
+    const moduleFiles = ['js/utils.js', 'js/state.js', 'js/render.js', 'js/wardrobe.js', 'js/calibration.js', 'js/import.js', 'js/export.js', 'js/cleanup.js', 'app.js'];
     for (const f of moduleFiles) {
       const res = await fetch(f);
       if (res.ok) zip.file(f, await res.blob());

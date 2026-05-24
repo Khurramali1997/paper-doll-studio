@@ -25,6 +25,7 @@ from compiler.compiler import AssetCompiler
 from compiler.guide_templates import build_guides_zip
 from compiler.rig_autodetect import detect_anchors, build_rig
 from compiler.reference_pack import build_reference_pack
+from compiler.ai_segmenter import process as ai_process
 
 import io as _io
 import json as _json
@@ -214,6 +215,32 @@ async def reference_pack(
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="reference_pack.zip"'},
     )
+
+
+@app.post("/api/ai-process")
+async def ai_process_endpoint(
+    image: UploadFile = File(...),
+    mode: str = Form(...),  # "bg-remove" | "clothing-isolate"
+):
+    """Apply rembg-based background removal or clothing isolation.
+
+    On first call per server process for each mode, rembg downloads the
+    underlying ONNX model (~85 MB) to ~/.u2net/. Subsequent calls reuse
+    the cached session.
+    """
+    if mode not in {"bg-remove", "clothing-isolate"}:
+        raise HTTPException(400, f"invalid mode: {mode!r}")
+    if not image.filename:
+        raise HTTPException(400, "No image file provided")
+    try:
+        content = await image.read()
+        src = _PILImage.open(_io.BytesIO(content))
+        result = ai_process(src, mode)
+    except Exception as e:
+        raise HTTPException(500, f"AI processing failed: {e}")
+    buf = _io.BytesIO()
+    result.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 
 @app.get("/api/guide-templates.zip")
