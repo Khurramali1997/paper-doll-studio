@@ -325,7 +325,7 @@ function saveStencils() {
 async function _saveStencilsAsync() {
   // Write/update every current stencil.
   const currentIds = new Set(editor.stencils.map(s => s.id));
-  await Promise.all(editor.stencils.map((stencil, i) =>
+  await Promise.all(editor.stencils.filter(s => !s.transient).map((stencil, i) =>
     _idbPut({
       id:     stencil.id,
       name:   stencil.name,
@@ -774,6 +774,7 @@ async function buildGeometryVariants() {
         name: item.name,
         source: item.source,
         canvas: item.canvas,
+        transient: true,
       });
     }
     editor.generatedVariants = created.map((item, index) => ({
