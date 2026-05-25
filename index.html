@@ -785,7 +785,10 @@
               <details class="control-group cleanup-workbench" id="details-cleanup-workbench" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
                 <summary style="cursor: pointer; font-weight: 600; font-size: 0.75rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
                   <span>🧼 Cleanup / Extraction Workbench</span>
-                  <span class="details-toggle-icon" style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
+                  <span style="display: flex; align-items: center; gap: 0.4rem;">
+                    <button type="button" id="btn-workbench-clear" onclick="event.stopPropagation()" style="padding: 0.2rem 0.55rem; border-radius: 5px; font-size: 0.65rem; font-family: var(--font-main); background: rgba(255,80,80,0.12); border: 1px solid rgba(255,80,80,0.35); color: var(--text-secondary); cursor: pointer;" title="Clear workbench and drop zone for a new asset">Clear</button>
+                    <span class="details-toggle-icon" style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
+                  </span>
                 </summary>
                 <div style="margin-top: 0.6rem;">
                   <div class="cleanup-preview-shell">
@@ -1169,6 +1172,7 @@
               <button class="action-btn accent" id="btn-ingest-submit" disabled style="margin-top: 0.6rem; padding: 0.6rem 0; font-size: 0.8rem; border-radius: 6px;">
                 📥 Process & Add to Wardrobe
               </button>
+              <div id="ingest-submit-status" style="display: none; margin-top: 0.45rem; padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 0.72rem; background: rgba(76,175,80,0.1); border: 1px solid rgba(76,175,80,0.3);"></div>
             </div>
 
             <!-- Export Project section -->

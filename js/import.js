@@ -1219,6 +1219,49 @@ async function finishCleanupBrushStroke() {
   await updateCleanupWarnings();
 }
 
+function clearCleanupWorkbench() {
+  setPendingAsset(null, null);
+  setPendingPreviewImage(null);
+  alignSettings.x = 0;
+  alignSettings.y = 0;
+  alignSettings.scaleX = 1.0;
+  alignSettings.scaleY = 1.0;
+  clearFitPreview();
+
+  cleanupState.initialized = false;
+  cleanupState.proposalStats = null;
+  cleanupState.proposalImageData = null;
+  cleanupState.mlAssist = null;
+  cleanupState.operations = [];
+  cleanupState.manualEdits = 0;
+  cleanupState.undoStack = [];
+
+  const cwCanvases = [
+    'cleanup-candidate-canvas', 'cleanup-source-canvas',
+    'cleanup-proposal-canvas', 'cleanup-stencil-overlay-canvas',
+    'cleanup-body-preview-canvas',
+  ];
+  for (const id of cwCanvases) {
+    const c = document.getElementById(id);
+    if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
+  }
+
+  const warnings = document.getElementById('cleanup-warnings');
+  if (warnings) { warnings.style.display = 'none'; warnings.textContent = ''; }
+
+  const laneCStatus = document.getElementById('cleanup-lane-c-status');
+  if (laneCStatus) { laneCStatus.style.display = 'none'; laneCStatus.textContent = ''; }
+
+  document.getElementById('btn-ingest-submit')?.setAttribute('disabled', 'true');
+  const txtName = document.getElementById('txt-ingest-name');
+  if (txtName) txtName.value = '';
+  const dropText = document.getElementById('asset-drop-text');
+  if (dropText) dropText.innerHTML = 'Drag & drop PNG/JPG here or <span class="browse-link">browse</span>';
+
+  const details = document.getElementById('details-cleanup-workbench');
+  if (details) details.removeAttribute('open');
+}
+
 function wireCleanupWorkbench() {
   const c = cleanupControls();
   const allControls = [
@@ -1392,6 +1435,11 @@ function wireCleanupWorkbench() {
   }
   syncCustomStencilSelect();
   syncStencilLayerSelect();
+
+  document.getElementById('btn-workbench-clear')?.addEventListener('click', () => {
+    clearCleanupWorkbench();
+    scheduleImportPreview();
+  });
 
   // Reverse sync: main sidebar body-subtract → cleanup checkbox
   const mainBodySubtract = document.getElementById('chk-subtract-body');
@@ -1864,24 +1912,7 @@ async function loadAndParsePSD(file, targetContainer) {
       // Reset the import/ingest state so the new character starts fresh.
       // Without this, a garment from the previous session stays queued and
       // its alignment/cleanup settings carry over to the new rig.
-      setPendingAsset(null, null);
-      setPendingPreviewImage(null);
-      alignSettings.x = 0;
-      alignSettings.y = 0;
-      alignSettings.scaleX = 1.0;
-      alignSettings.scaleY = 1.0;
-      clearFitPreview();
-      cleanupState.initialized = false;
-      const _cwCanvases = ['cleanup-candidate-canvas', 'cleanup-source-canvas', 'cleanup-proposal-canvas'];
-      for (const id of _cwCanvases) {
-        const c = document.getElementById(id);
-        if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
-      }
-      document.getElementById('btn-ingest-submit')?.setAttribute('disabled', 'true');
-      const _txtName = document.getElementById('txt-ingest-name');
-      if (_txtName) _txtName.value = '';
-      const _dropText = document.getElementById('asset-drop-text');
-      if (_dropText) _dropText.innerHTML = 'Drag & drop PNG/JPG here or <span class="browse-link">browse</span>';
+      clearCleanupWorkbench();
       scheduleImportPreview();
 
       window.dispatchEvent(new CustomEvent('paperdoll:psd-loaded', { detail: { filename: file.name } }));
@@ -2112,20 +2143,28 @@ async function processIngest(targetContainer, assetDropText, txtIngestName) {
 
     state.wardrobe[slot] = cleanName;
 
-    setPendingPreviewImage(null);
     _invalidateAICache();
 
     buildUI(targetContainer);
     renderDoll(targetContainer);
     updateCalibrateUI();
 
-    alert(`Successfully processed and added "${displayName}" to wardrobe!`);
+    clearCleanupWorkbench();
+    scheduleImportPreview();
+
+    const statusEl = document.getElementById('ingest-submit-status');
+    if (statusEl) {
+      statusEl.textContent = `✓ "${displayName}" added to wardrobe. Drop the next garment to continue.`;
+      statusEl.style.display = 'block';
+      statusEl.style.color = 'var(--success-color, #4caf50)';
+      setTimeout(() => { statusEl.style.display = 'none'; }, 5000);
+    }
   } catch (err) {
     console.error(err);
     alert(`Error ingesting asset: ${err.message}`);
   } finally {
     btnIngestSubmit.removeAttribute('disabled');
-    btnIngestSubmit.textContent = 'Process & Add to Wardrobe';
+    btnIngestSubmit.textContent = '📥 Process & Add to Wardrobe';
   }
 }
 
