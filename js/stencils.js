@@ -2,7 +2,7 @@ import { DOLL_CONFIG } from './state.js';
 import { dilateMask, erodeMask, featherMask, keepLargestConnectedComponent } from './cleanup.js';
 import { generateBodySilhouetteCanvas, generateBodyCompositeCanvas, generateSkinCompositeCanvas } from './export.js';
 import { canvasToBlob, downloadBlob, getBoundingBox, loadImage } from './utils.js';
-import { receiveAssetForCleanup } from './import.js';
+import { receiveAssetForCleanup, registerCleanupStencils } from './import.js';
 import { localImageCache } from './render.js';
 
 const STORAGE_KEY = 'paperdoll_user_stencils_v1';
@@ -428,6 +428,7 @@ function syncUserSelect() {
 }
 
 function renderGallery() {
+  registerCleanupStencils(editor.stencils);
   const gallery = el('stencil-gallery');
   if (!gallery) return;
   gallery.textContent = '';
@@ -1351,6 +1352,7 @@ async function _sendTailor() {
   const view = new Uint8Array(ab);
   for (let i = 0; i < byteStr.length; i++) view[i] = byteStr.charCodeAt(i);
   const blob = new Blob([ab], { type: 'image/png' });
+  registerCleanupStencils(editor.stencils);
   await receiveAssetForCleanup(blob, `tailor_${recipe}.png`);
 }
 
@@ -1621,6 +1623,7 @@ function _configureCleanupForGenerator() {
   if (islands) islands.checked = true;
   const alphaRange = document.getElementById('range-cleanup-alpha-threshold');
   if (alphaRange) { alphaRange.value = '20'; alphaRange.dispatchEvent(new Event('input')); }
+  registerCleanupStencils(editor.stencils);
 }
 
 // ─── Core ML Generator ───────────────────────────────────────────────────
@@ -2061,6 +2064,7 @@ export async function initStencils() {
   if (el('val-stencil-depth-cutoff')) el('val-stencil-depth-cutoff').textContent = el('range-stencil-depth-cutoff')?.value || '58';
   if (el('val-stencil-edge-grow')) el('val-stencil-edge-grow').textContent = el('range-stencil-edge-grow')?.value || '8';
   syncFabricStencilSelects();
+  registerCleanupStencils(editor.stencils);
   loadFabricWardrobeSelect();
   initTailorSliderLabels();
   initTailorAnchors();

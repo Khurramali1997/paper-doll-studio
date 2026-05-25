@@ -483,6 +483,8 @@ async function initCleanupWorkbenchForImage(image) {
   putCanvasImageData(candidateCanvas, cleanupState.candidateImageData);
   setCleanupPreviewFocus(cleanupState.previewFocus);
   syncLaneCAssistVisibility();
+  syncStencilLayerSelect();
+  syncCustomStencilSelect();
   fitCleanupZoom();
   await applyCleanupFromControls({ preserveManual: false });
 }
@@ -1093,8 +1095,12 @@ async function updateCleanupWarnings() {
   if (cleanupState.sourceLane === 'clothed_guide') {
     const proposalStats = cleanupState.proposalStats || cleanupState.mlAssist?.proposal_stats;
     const flags = proposalStats?.warnings || {};
-    if (flags.empty || flags.overclean || flags.coverage_drop) {
-      warnings.push('Assisted mask removed most of the asset.');
+    if (flags.empty) {
+      warnings.push('Assisted mask is nearly empty — proposal removed almost all pixels.');
+    } else if (flags.used_fallback) {
+      warnings.push('CV heuristic over-cleaned; fallback mask is active. Review the proposal before applying.');
+    } else if (flags.overclean || flags.coverage_drop) {
+      warnings.push('Assisted mask removed most of the asset — check coverage before applying.');
     }
     if (flags.proposal_diff) {
       warnings.push('Assisted proposal differs sharply from the current cleaned candidate.');
@@ -1386,6 +1392,17 @@ function wireCleanupWorkbench() {
   }
   syncCustomStencilSelect();
   syncStencilLayerSelect();
+
+  // Reverse sync: main sidebar body-subtract → cleanup checkbox
+  const mainBodySubtract = document.getElementById('chk-subtract-body');
+  if (mainBodySubtract && c.bodySubtract) {
+    mainBodySubtract.addEventListener('change', () => {
+      if (c.bodySubtract.checked !== mainBodySubtract.checked) {
+        c.bodySubtract.checked = mainBodySubtract.checked;
+        applyCleanupFromControls();
+      }
+    });
+  }
 
   const candidateCanvas = document.getElementById('cleanup-candidate-canvas');
   if (candidateCanvas) {
@@ -2465,6 +2482,11 @@ function switchToTab(tabName) {
   document.querySelectorAll('.tab-pane').forEach(p => {
     p.classList.toggle('active', p.id === `tab-${tabName}`);
   });
+}
+
+export function registerCleanupStencils(stencils) {
+  cleanupState.customStencils = (stencils || []).map(s => ({ id: s.id, name: s.name, canvas: s.canvas }));
+  syncCustomStencilSelect();
 }
 
 export async function receiveAssetForCleanup(blob, filename) {

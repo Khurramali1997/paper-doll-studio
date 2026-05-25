@@ -155,6 +155,7 @@ def propose_lane_c_mask(
 
     source_visible_count = int(visible.sum())
     candidate_count = int(candidate.sum())
+    used_fallback = False
     if source_visible_count and candidate_count / source_visible_count < 0.015:
         # Keep Lane C proposals editable and non-destructive by avoiding a
         # nearly empty mask when the heuristic over-cleans.
@@ -164,6 +165,7 @@ def propose_lane_c_mask(
         if fallback.sum() > candidate_count:
             candidate = fallback
             candidate_count = int(candidate.sum())
+            used_fallback = True
 
     out_alpha = np.where(candidate, alpha, 0).astype(np.uint8)
     if int(alpha.max()) == 255 and int(alpha.min()) == 255:
@@ -191,6 +193,7 @@ def propose_lane_c_mask(
         "coverage_drop": removed_coverage > 0.82,
         "body_background_likely": coverage > 0.7 or (visible.mean() > 0.95 and removed_coverage < 0.08),
         "outline_damage": edge_score < 0.82,
+        "used_fallback": used_fallback,
     }
     if current_diff_coverage is not None:
         flags["proposal_diff"] = current_diff_coverage > 0.35

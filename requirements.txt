@@ -1,14 +1,20 @@
+fastapi>=0.100.0
+uvicorn>=0.23.0
 pillow>=10.0.0
 psd-tools>=1.0.0
 rembg[cpu]>=2.0.0
 jsonschema>=4.20.0
 numpy>=1.24.0
 opencv-python-headless>=4.9.0
+mediapipe>=0.10.0
 peft>=0.13.0
 
-# Optional model files (place in models/ to enable):
-#   models/isnet_anime.onnx     ~170 MB  auto-downloaded from HuggingFace skytnt/anime-seg
-#   models/lbpcascade_animeface.xml  ~2.6 MB  auto-downloaded from github.com/nagadomi
-#   models/wd14_moat_tagger.onnx  ~350 MB  manual opt-in from HuggingFace SmilingWolf/wd-v1-4-moat-tagger-v2
-# onnxruntime is already a transitive dependency of rembg[cpu]
-# mediapipe is already used by compiler/pose_estimator.py
+# onnxruntime is pulled in as a transitive dependency of rembg[cpu]
+# Optional model files auto-download to models/ on first API call:
+#   depth_anything_v2_vits.onnx  ~50 MB   (reference pack depth channel)
+#   pose_landmarker_full.task    ~10 MB   (reference pack pose channel)
+#   dw-ll_ucoco_384.onnx         ~134 MB  (Digital Tailor whole-body pose)
+#   isnet-anime_1024.onnx        ~170 MB  (stencil pipeline foreground segmentation)
+#   lbpcascade_animeface.xml     ~2.6 MB  (stencil pipeline face detection)
+#   hand_landmarker.task         ~8 MB    (stencil pipeline hand detection)
+# WD14 MOAT tagger (~350 MB) — manual opt-in, not auto-downloaded

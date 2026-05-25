@@ -8,12 +8,16 @@ version = "1.0.0"
 description = "Paper Doll Studio — local-first character customization pipeline"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
     "pillow>=10.0.0",
     "psd-tools>=1.0.0",
     "rembg[cpu]>=2.0.0",
     "jsonschema>=4.20.0",
     "numpy>=1.24.0",
     "opencv-python-headless>=4.9.0",
+    "mediapipe>=0.10.0",
+    "peft>=0.13.0",
 ]
 
 [project.optional-dependencies]
