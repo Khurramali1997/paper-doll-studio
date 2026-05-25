@@ -876,6 +876,19 @@ function bindEvents() {
   el('btn-fabric-generate')?.addEventListener('click', buildFabricAsset);
   el('btn-fabric-download-composite')?.addEventListener('click', downloadFabricComposite);
   el('btn-fabric-download-manifest')?.addEventListener('click', downloadFabricManifest);
+  el('btn-coreml-generate')?.addEventListener('click', buildCoreMLGeneration);
+  el('btn-coreml-to-cleanup')?.addEventListener('click', sendCoreMLToCleanup);
+  el('btn-layerdiffuse-generate')?.addEventListener('click', buildLayerDiffuseGeneration);
+  el('btn-layerdiffuse-to-cleanup')?.addEventListener('click', sendLayerDiffuseToCleanup);
+  el('select-layerdiffuse-speed-preset')?.addEventListener('change', event => {
+    const preset = event.target.value;
+    const steps = el('num-layerdiffuse-steps');
+    const guidance = el('num-layerdiffuse-guidance');
+    if (preset === 'lcm') {
+      if (steps) steps.value = '4';
+      if (guidance) guidance.value = '1';
+    }
+  });
   el('select-fabric-wardrobe')?.addEventListener('change', () => {
     const sel = el('select-fabric-wardrobe');
     const item = _wardrobeManifest.find(m => m.asset_id === sel?.value);
@@ -1365,17 +1378,48 @@ async function loadFabricWardrobeSelect() {
 
 function syncFabricStencilSelects() {
   const nearSel = el('select-fabric-near-stencil');
-  if (!nearSel) return;
-  nearSel.textContent = '';
-  const none = document.createElement('option');
-  none.value = '';
-  none.textContent = '— none (use garment alpha) —';
-  nearSel.appendChild(none);
+  if (nearSel) {
+    nearSel.textContent = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '— none (use garment alpha) —';
+    nearSel.appendChild(none);
+  }
+  const coremlSel = el('select-coreml-mask-stencil');
+  if (coremlSel) {
+    coremlSel.textContent = '';
+    const body = document.createElement('option');
+    body.value = '';
+    body.textContent = 'Body silhouette';
+    coremlSel.appendChild(body);
+  }
+  const layerSel = el('select-layerdiffuse-mask-stencil');
+  if (layerSel) {
+    layerSel.textContent = '';
+    const body = document.createElement('option');
+    body.value = '';
+    body.textContent = 'Body silhouette';
+    layerSel.appendChild(body);
+  }
   for (const stencil of editor.stencils) {
-    const opt = document.createElement('option');
-    opt.value = stencil.id;
-    opt.textContent = stencil.name;
-    nearSel.appendChild(opt);
+    if (nearSel) {
+      const opt = document.createElement('option');
+      opt.value = stencil.id;
+      opt.textContent = stencil.name;
+      nearSel.appendChild(opt);
+    }
+    if (coremlSel) {
+      const opt = document.createElement('option');
+      opt.value = stencil.id;
+      opt.textContent = stencil.name;
+      coremlSel.appendChild(opt);
+    }
+    if (layerSel) {
+      const opt = document.createElement('option');
+      opt.value = stencil.id;
+      opt.textContent = stencil.name;
+      layerSel.appendChild(opt);
+    }
   }
 }
 
@@ -1540,6 +1584,195 @@ function downloadFabricManifest() {
   a.download = 'asset_manifest_entry.json';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ─── Core ML Generator ───────────────────────────────────────────────────
+
+let _coremlResult = null;
+
+function setCoreMLStatus(msg, isError = false) {
+  const status = el('coreml-status');
+  if (!status) return;
+  status.style.display = msg ? 'block' : 'none';
+  status.style.color = isError ? 'var(--danger-color)' : '';
+  status.textContent = msg || '';
+}
+
+async function maskBlobForCoreML() {
+  const selectedId = el('select-coreml-mask-stencil')?.value || '';
+  if (selectedId) {
+    const stencil = editor.stencils.find(s => s.id === selectedId);
+    if (stencil) return canvasToBlob(stencil.canvas);
+  }
+  const silCanvas = await generateBodySilhouetteCanvas();
+  return canvasToBlob(silCanvas);
+}
+
+async function buildCoreMLGeneration() {
+  const prompt = (el('txt-coreml-prompt')?.value || '').trim();
+  if (!prompt) {
+    setCoreMLStatus('Prompt is required.', true);
+    return;
+  }
+
+  const btn = el('btn-coreml-generate');
+  if (btn) btn.disabled = true;
+  if (el('coreml-result')) el('coreml-result').style.display = 'none';
+  setCoreMLStatus('Preparing Core ML inputs...');
+
+  try {
+    const [silCanvas, bodyCanvas, maskBlob] = await Promise.all([
+      generateBodySilhouetteCanvas(),
+      generateBodyCompositeCanvas(),
+      maskBlobForCoreML(),
+    ]);
+    const [silBlob, bodyBlob] = await Promise.all([
+      canvasToBlob(silCanvas),
+      canvasToBlob(bodyCanvas),
+    ]);
+
+    const fd = new FormData();
+    fd.append('prompt', prompt);
+    fd.append('negative_prompt', el('txt-coreml-negative')?.value || '');
+    fd.append('seed', el('num-coreml-seed')?.value || '93');
+    fd.append('steps', el('num-coreml-steps')?.value || '28');
+    fd.append('guidance_scale', el('num-coreml-guidance')?.value || '7');
+    fd.append('compute_unit', el('select-coreml-compute')?.value || 'CPU_AND_NE');
+    fd.append('model_version', el('txt-coreml-model-version')?.value || 'runwayml/stable-diffusion-v1-5');
+    fd.append('mode', el('select-coreml-mode')?.value || 'txt2img');
+    fd.append('enable_openpose', el('chk-coreml-openpose')?.checked ? 'true' : 'false');
+    fd.append('enable_depth', el('chk-coreml-depth')?.checked ? 'true' : 'false');
+    fd.append('silhouette', silBlob, 'body_silhouette.png');
+    fd.append('body', bodyBlob, 'body_composite.png');
+    fd.append('image', bodyBlob, 'init_image.png');
+    fd.append('mask', maskBlob, 'inpaint_mask.png');
+
+    setCoreMLStatus('Running Core ML...');
+    const res = await fetch('/api/coreml/generate', { method: 'POST', body: fd });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const d = await res.json(); detail = d.detail || detail; } catch {}
+      throw new Error(`HTTP ${res.status}: ${detail}`);
+    }
+    const data = await res.json();
+    _coremlResult = data;
+
+    const preview = el('coreml-preview-img');
+    if (preview) preview.src = `data:image/png;base64,${data.image_b64}`;
+    const meta = el('coreml-meta');
+    if (meta) {
+      const m = data.metadata || {};
+      meta.textContent = `${m.mode || 'coreml'} · seed ${m.seed ?? ''} · ${m.steps ?? ''} steps`;
+    }
+    if (el('coreml-result')) el('coreml-result').style.display = 'block';
+    setCoreMLStatus('');
+  } catch (err) {
+    setCoreMLStatus(`Core ML error: ${err.message || err}`, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function sendCoreMLToCleanup() {
+  if (!_coremlResult?.image_b64) return;
+  const byteStr = atob(_coremlResult.image_b64);
+  const ab = new ArrayBuffer(byteStr.length);
+  const view = new Uint8Array(ab);
+  for (let i = 0; i < byteStr.length; i++) view[i] = byteStr.charCodeAt(i);
+  const seed = _coremlResult.metadata?.seed ?? 'seed';
+  const blob = new Blob([ab], { type: 'image/png' });
+  await receiveAssetForCleanup(blob, `coreml_${seed}.png`);
+}
+
+// ─── LayerDiffuse Generator ──────────────────────────────────────────────
+
+let _layerdiffuseResult = null;
+
+function setLayerDiffuseStatus(msg, isError = false) {
+  const status = el('layerdiffuse-status');
+  if (!status) return;
+  status.style.display = msg ? 'block' : 'none';
+  status.style.color = isError ? 'var(--danger-color)' : '';
+  status.textContent = msg || '';
+}
+
+async function maskBlobForLayerDiffuse() {
+  const selectedId = el('select-layerdiffuse-mask-stencil')?.value || '';
+  if (selectedId) {
+    const stencil = editor.stencils.find(s => s.id === selectedId);
+    if (stencil) return canvasToBlob(stencil.canvas);
+  }
+  const silCanvas = await generateBodySilhouetteCanvas();
+  return canvasToBlob(silCanvas);
+}
+
+async function buildLayerDiffuseGeneration() {
+  const prompt = (el('txt-layerdiffuse-prompt')?.value || '').trim();
+  if (!prompt) {
+    setLayerDiffuseStatus('Prompt is required.', true);
+    return;
+  }
+
+  const btn = el('btn-layerdiffuse-generate');
+  if (btn) btn.disabled = true;
+  if (el('layerdiffuse-result')) el('layerdiffuse-result').style.display = 'none';
+  setLayerDiffuseStatus('Preparing LayerDiffuse inputs...');
+
+  try {
+    const [bodyCanvas, maskBlob] = await Promise.all([
+      generateBodyCompositeCanvas(),
+      maskBlobForLayerDiffuse(),
+    ]);
+    const bodyBlob = await canvasToBlob(bodyCanvas);
+
+    const fd = new FormData();
+    fd.append('prompt', prompt);
+    fd.append('negative_prompt', el('txt-layerdiffuse-negative')?.value || '');
+    fd.append('mode', el('select-layerdiffuse-mode')?.value || 'bg2fg');
+    fd.append('seed', el('num-layerdiffuse-seed')?.value || '93');
+    fd.append('steps', el('num-layerdiffuse-steps')?.value || '24');
+    fd.append('guidance_scale', el('num-layerdiffuse-guidance')?.value || '7');
+    fd.append('speed_preset', el('select-layerdiffuse-speed-preset')?.value || 'normal');
+    fd.append('model', el('txt-layerdiffuse-model')?.value || 'digiplay/Juggernaut_final');
+    fd.append('device', el('select-layerdiffuse-device')?.value || 'auto');
+    fd.append('background', bodyBlob, 'body_composite.png');
+    fd.append('mask', maskBlob, 'garment_mask.png');
+
+    setLayerDiffuseStatus('Running LayerDiffuse...');
+    const res = await fetch('/api/layerdiffuse/generate', { method: 'POST', body: fd });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const d = await res.json(); detail = d.detail || detail; } catch {}
+      throw new Error(`HTTP ${res.status}: ${detail}`);
+    }
+    const data = await res.json();
+    _layerdiffuseResult = data;
+
+    const preview = el('layerdiffuse-preview-img');
+    if (preview) preview.src = `data:image/png;base64,${data.image_b64}`;
+    const meta = el('layerdiffuse-meta');
+    if (meta) {
+      const m = data.metadata || {};
+      meta.textContent = `${m.mode || 'layerdiffuse'} · ${m.speed_preset || 'normal'} · seed ${m.seed ?? ''} · ${m.steps ?? ''} steps`;
+    }
+    if (el('layerdiffuse-result')) el('layerdiffuse-result').style.display = 'block';
+    setLayerDiffuseStatus('');
+  } catch (err) {
+    setLayerDiffuseStatus(`LayerDiffuse error: ${err.message || err}`, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function sendLayerDiffuseToCleanup() {
+  if (!_layerdiffuseResult?.image_b64) return;
+  const byteStr = atob(_layerdiffuseResult.image_b64);
+  const ab = new ArrayBuffer(byteStr.length);
+  const view = new Uint8Array(ab);
+  for (let i = 0; i < byteStr.length; i++) view[i] = byteStr.charCodeAt(i);
+  const seed = _layerdiffuseResult.metadata?.seed ?? 'seed';
+  const blob = new Blob([ab], { type: 'image/png' });
+  await receiveAssetForCleanup(blob, `layerdiffuse_${seed}.png`);
 }
 
 export async function initStencils() {

@@ -1,4 +1,6 @@
 venv/
+.venv-coreml/
+.venv-layerdiffuse/
 __pycache__/
 .DS_Store
 *.pyc
@@ -11,4 +13,7 @@ htmlcov/
 
 # Downloaded ML model files (auto-fetched on first use)
 models/
-
+public/assets/coreml_generated/
+public/assets/layerdiffuse_generated/
+vendor/ml-stable-diffusion/
+vendor/diffuser_layerdiffuse/

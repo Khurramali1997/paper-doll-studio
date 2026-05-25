@@ -10,6 +10,7 @@ import sys
 import json
 import tempfile
 import re
+import uuid
 from pathlib import Path
 
 import mimetypes
@@ -28,6 +29,13 @@ from compiler.reference_pack import build_reference_pack, build_reference_channe
 from compiler.ai_segmenter import process as ai_process
 from compiler.cleanup_assist import propose_lane_c_mask
 from compiler.stencil_pipeline import run_pipeline as _run_stencil_pipeline, PIPELINE_CONFIG as _STENCIL_DEFAULTS
+from compiler.coreml_bridge import CoreMLRequest, coreml_status, run_generation
+from compiler.layerdiffuse_bridge import (
+    LayerDiffuseRequest,
+    layerdiffuse_status,
+    normalize_request as normalize_layerdiffuse_request,
+    run_generation as run_layerdiffuse_generation,
+)
 
 import io as _io
 import json as _json
@@ -287,6 +295,266 @@ async def ai_process_endpoint(
     return Response(content=buf.getvalue(), media_type="image/png")
 
 
+@app.get("/api/coreml/status")
+async def coreml_status_endpoint():
+    """Report whether a local Core ML generation backend is configured."""
+    return JSONResponse(coreml_status())
+
+
+def _parse_controlnet_models(raw: str) -> List[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _save_pil_png(img: _PILImage.Image, path: str):
+    img.save(path, format="PNG")
+    return Path(path)
+
+
+@app.post("/api/coreml/generate")
+async def coreml_generate_endpoint(
+    prompt: str = Form(...),
+    negative_prompt: str = Form(""),
+    seed: int = Form(93),
+    steps: int = Form(28),
+    guidance_scale: float = Form(7.0),
+    compute_unit: str = Form("CPU_AND_NE"),
+    model_version: str = Form("runwayml/stable-diffusion-v1-5"),
+    mode: str = Form("txt2img"),
+    controlnet_models: str = Form(""),
+    enable_openpose: str = Form("true"),
+    enable_depth: str = Form("true"),
+    image: Optional[UploadFile] = File(None),
+    mask: Optional[UploadFile] = File(None),
+    silhouette: Optional[UploadFile] = File(None),
+    body: Optional[UploadFile] = File(None),
+):
+    """Run a configured local Core ML generation command.
+
+    The default backend is Apple's ``python_coreml_stable_diffusion.pipeline``
+    for txt2img/ControlNet. Inpaint is supported through
+    PAPERDOLL_COREML_COMMAND_TEMPLATE so a Swift/CoreML runner can be swapped
+    in without changing this API.
+    """
+    prompt = prompt.strip()
+    if not prompt:
+        raise HTTPException(400, "Prompt is required")
+    if mode not in {"txt2img", "image2image", "inpaint"}:
+        raise HTTPException(400, f"Unsupported Core ML mode: {mode!r}")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="paperdoll_coreml_") as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "inputs"
+            output_dir = tmp_path / "outputs"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            init_path = None
+            mask_path = None
+            body_img = None
+            sil_img = None
+
+            if image and image.filename:
+                init_path = input_dir / "init_image.png"
+                init_path.write_bytes(await image.read())
+
+            if mask and mask.filename:
+                mask_path = input_dir / "mask.png"
+                mask_path.write_bytes(await mask.read())
+
+            if body and body.filename:
+                body_img = _PILImage.open(_io.BytesIO(await body.read())).convert("RGB")
+                if init_path is None:
+                    init_path = _save_pil_png(body_img, str(input_dir / "body_composite.png"))
+
+            if silhouette and silhouette.filename:
+                sil_img = _PILImage.open(_io.BytesIO(await silhouette.read())).convert("RGBA")
+                if mask_path is None and mode == "inpaint":
+                    mask_path = _save_pil_png(sil_img, str(input_dir / "inpaint_mask.png"))
+
+            control_models = _parse_controlnet_models(controlnet_models)
+            control_inputs: List[Path] = []
+            inferred_control_models: List[str] = []
+            if sil_img is not None and (
+                enable_openpose.lower() == "true" or enable_depth.lower() == "true"
+            ):
+                anchors = None
+                rig_path = os.path.join(BASE_RIG_DIR, "rig.json")
+                if os.path.exists(rig_path):
+                    try:
+                        with open(rig_path) as f:
+                            anchors = _json.load(f).get("anchors")
+                    except Exception:
+                        anchors = None
+
+                channels = dict(build_reference_channels(sil_img, anchors=anchors, body_composite=body_img))
+                if enable_openpose.lower() == "true" and "pose.png" in channels:
+                    path = input_dir / "control_openpose.png"
+                    channels["pose.png"].save(path, "PNG")
+                    control_inputs.append(path)
+                    inferred_control_models.append("lllyasviel/sd-controlnet-openpose")
+                if enable_depth.lower() == "true" and "depth.png" in channels:
+                    path = input_dir / "control_depth.png"
+                    channels["depth.png"].save(path, "PNG")
+                    control_inputs.append(path)
+                    inferred_control_models.append("lllyasviel/sd-controlnet-depth")
+
+            if not control_models:
+                control_models = inferred_control_models
+
+            req = CoreMLRequest(
+                prompt=prompt,
+                negative_prompt=negative_prompt.strip(),
+                seed=seed,
+                steps=steps,
+                guidance_scale=guidance_scale,
+                compute_unit=compute_unit,
+                model_version=model_version,
+                mode=mode,
+                init_image=init_path,
+                mask_image=mask_path,
+                controlnet_models=control_models,
+                controlnet_inputs=control_inputs,
+            )
+            result = run_generation(req, output_dir)
+            generated_dir = Path("public") / "assets" / "coreml_generated"
+            generated_dir.mkdir(parents=True, exist_ok=True)
+            generated_name = f"coreml_{seed}_{uuid.uuid4().hex[:8]}.png"
+            generated_path = generated_dir / generated_name
+            generated_path.write_bytes(_base64.b64decode(result["image_b64"]))
+            return JSONResponse({
+                "success": True,
+                "image_b64": result["image_b64"],
+                "image_path": str(generated_path),
+                "metadata": {
+                    "prompt": prompt,
+                    "negative_prompt": req.negative_prompt,
+                    "seed": seed,
+                    "steps": steps,
+                    "guidance_scale": guidance_scale,
+                    "compute_unit": compute_unit,
+                    "model_version": model_version,
+                    "mode": mode,
+                    "controlnet_models": control_models,
+                    "controlnet_inputs": [p.name for p in control_inputs],
+                    "backend": coreml_status(),
+                    "stdout_tail": result.get("stdout_tail", ""),
+                    "stderr_tail": result.get("stderr_tail", ""),
+                },
+            })
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Core ML generation failed: {e}")
+
+
+@app.get("/api/layerdiffuse/status")
+async def layerdiffuse_status_endpoint():
+    """Report whether the local LayerDiffuse backend is configured."""
+    return JSONResponse(layerdiffuse_status())
+
+
+@app.post("/api/layerdiffuse/generate")
+async def layerdiffuse_generate_endpoint(
+    prompt: str = Form(...),
+    negative_prompt: str = Form(""),
+    mode: str = Form("bg2fg"),
+    speed_preset: str = Form("normal"),
+    seed: int = Form(93),
+    steps: int = Form(24),
+    guidance_scale: float = Form(7.0),
+    width: int = Form(512),
+    height: int = Form(512),
+    model: str = Form(""),
+    device: str = Form("auto"),
+    background: Optional[UploadFile] = File(None),
+    mask: Optional[UploadFile] = File(None),
+):
+    """Generate a transparent PNG layer with LayerDiffuse."""
+    prompt = prompt.strip()
+    if not prompt:
+        raise HTTPException(400, "Prompt is required")
+    if mode not in {"fg_only", "bg2fg"}:
+        raise HTTPException(400, f"Unsupported LayerDiffuse mode: {mode!r}")
+    if speed_preset not in {"normal", "lcm"}:
+        raise HTTPException(400, f"Unsupported LayerDiffuse speed preset: {speed_preset!r}")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="paperdoll_layerdiffuse_") as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "inputs"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            bg_path = None
+            mask_path = None
+
+            if background and background.filename:
+                bg_path = input_dir / "background.png"
+                bg_path.write_bytes(await background.read())
+            if mask and mask.filename:
+                mask_path = input_dir / "mask.png"
+                mask_path.write_bytes(await mask.read())
+
+            if mode == "bg2fg" and bg_path is None:
+                raise HTTPException(400, "background image is required for bg2fg")
+
+            generated_dir = Path("public") / "assets" / "layerdiffuse_generated"
+            generated_dir.mkdir(parents=True, exist_ok=True)
+            generated_name = f"layerdiffuse_{seed}_{uuid.uuid4().hex[:8]}.png"
+            generated_path = generated_dir / generated_name
+
+            req = LayerDiffuseRequest(
+                prompt=prompt,
+                negative_prompt=negative_prompt.strip(),
+                mode=mode,
+                speed_preset=speed_preset,
+                seed=seed,
+                steps=steps,
+                guidance_scale=guidance_scale,
+                width=width,
+                height=height,
+                model=model.strip() or os.environ.get("PAPERDOLL_LAYERDIFFUSE_MODEL", "digiplay/Juggernaut_final"),
+                device=device,
+                background=bg_path,
+                mask=mask_path,
+            )
+            effective_req = normalize_layerdiffuse_request(req)
+            result = run_layerdiffuse_generation(effective_req, generated_path)
+            return JSONResponse({
+                "success": True,
+                "image_b64": result["image_b64"],
+                "image_path": result["image_path"],
+                "metadata": {
+                    "prompt": prompt,
+                    "negative_prompt": effective_req.negative_prompt,
+                    "mode": effective_req.mode,
+                    "speed_preset": effective_req.speed_preset,
+                    "seed": effective_req.seed,
+                    "steps": effective_req.steps,
+                    "guidance_scale": effective_req.guidance_scale,
+                    "width": effective_req.width,
+                    "height": effective_req.height,
+                    "model": effective_req.model,
+                    "device": effective_req.device,
+                    "backend": layerdiffuse_status(),
+                    "stdout_tail": result.get("stdout_tail", ""),
+                    "stderr_tail": result.get("stderr_tail", ""),
+                },
+            })
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"LayerDiffuse generation failed: {e}")
+
+
 @app.post("/api/cleanup-assist/lane-c")
 async def cleanup_assist_lane_c(
     image: UploadFile = File(...),
@@ -510,6 +778,18 @@ async def construct_pattern_endpoint(
                 gray = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY) if decoded.ndim == 3 else decoded
                 body_silhouette_arr = np.where(gray > 10, np.uint8(255), np.uint8(0))
 
+    # Generate depth map from body silhouette for volumetric lighting
+    depth_arr = None
+    if body_silhouette_arr is not None:
+        try:
+            from compiler.reference_pack import make_depth as _make_depth
+            sil_pil = _PILImage.fromarray(body_silhouette_arr, mode="L")
+            sil_rgb = sil_pil.convert("RGB")
+            depth_pil = _make_depth(sil_rgb)
+            depth_arr = np.array(depth_pil.convert("L"), dtype=np.uint8)
+        except Exception as e:
+            print(f"depth_map: generation failed: {e}")
+
     if body_silhouette_arr is None:
         raise HTTPException(400, "No PSD loaded — load a character before using the Digital Tailor")
 
@@ -587,6 +867,7 @@ async def construct_pattern_endpoint(
             body_silhouette_arr=body_silhouette_arr,
             derived_anchors=derived_anchors,
             style_schema=style_schema,
+            depth_arr=depth_arr,
         )
     except Exception as e:
         raise HTTPException(500, f"Pattern construction failed: {e}")

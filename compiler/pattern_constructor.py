@@ -883,6 +883,7 @@ def construct_pattern(
     body_silhouette_arr: Optional[np.ndarray] = None,
     derived_anchors: Optional[Dict] = None,
     style_schema: Optional[Dict] = None,
+    depth_arr: Optional[np.ndarray] = None,
 ) -> Dict:
     """Full pipeline: recipe → rendered BGRA asset.
 
@@ -898,6 +899,7 @@ def construct_pattern(
     semantic     : optional pre-computed semantic_layer.annotate() result to reuse
     derived_anchors : live-derived anchors (e.g. from DWPose) that override rig.json
     style_schema    : cel-shading schema from extract_style_schema() — replaces flat fill
+    depth_arr       : uint8 grayscale depth map — used for volumetric lighting overlay
 
     Returns
     -------
@@ -939,6 +941,19 @@ def construct_pattern(
         else:
             rgba = fill_solid(mask, color)
             ops.append(f"fill:solid({color})")
+
+    # Depth-based volumetric lighting overlay (near = bright, far = dark)
+    if depth_arr is not None:
+        d = depth_arr.astype(np.float32) / 255.0
+        if d.ndim == 3:
+            d = d[:, :, 0]
+        d = cv2.GaussianBlur(d, (0, 0), sigmaX=6, sigmaY=6)
+        d = np.clip(d, 0.2, 1.0)
+        alpha = rgba[:, :, 3].astype(np.float32) / 255.0
+        for c in range(3):
+            rgba[:, :, c] = (rgba[:, :, c].astype(np.float32) * d).astype(np.uint8)
+        rgba[:, :, 3] = (alpha * 255).astype(np.uint8)
+        ops.append("effect:depth_lighting")
 
     if effects.get("inner_shadow", False):
         rgba = apply_inner_shadow(rgba, mask)
