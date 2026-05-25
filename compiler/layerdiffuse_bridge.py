@@ -35,6 +35,8 @@ class LayerDiffuseRequest:
     device: str = "auto"
     background: Optional[Path] = None
     mask: Optional[Path] = None
+    alpha_threshold: int = 20
+    clip_to_mask: bool = False
 
 
 def normalize_request(req: LayerDiffuseRequest) -> LayerDiffuseRequest:
@@ -96,6 +98,7 @@ def _build_template_command(req: LayerDiffuseRequest, output_path: Path) -> List
         "device": shlex.quote(req.device),
         "background": shlex.quote(str(req.background or "")),
         "mask": shlex.quote(str(req.mask or "")),
+        "alpha_threshold": str(req.alpha_threshold),
         "output": shlex.quote(str(output_path)),
     }
     missing = _template_fields(template) - set(values)
@@ -135,6 +138,9 @@ def build_command(req: LayerDiffuseRequest, output_path: Path) -> List[str]:
         cmd.extend(["--background", str(req.background)])
     if req.mask:
         cmd.extend(["--mask", str(req.mask)])
+    cmd.extend(["--alpha-threshold", str(req.alpha_threshold)])
+    if req.clip_to_mask:
+        cmd.append("--clip-to-mask")
     if _env("PAPERDOLL_LAYERDIFFUSE_CPU_OFFLOAD") == "1":
         cmd.append("--cpu-offload")
     return cmd

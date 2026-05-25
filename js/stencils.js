@@ -880,6 +880,13 @@ function bindEvents() {
   el('btn-coreml-to-cleanup')?.addEventListener('click', sendCoreMLToCleanup);
   el('btn-layerdiffuse-generate')?.addEventListener('click', buildLayerDiffuseGeneration);
   el('btn-layerdiffuse-to-cleanup')?.addEventListener('click', sendLayerDiffuseToCleanup);
+  el('btn-inpaint-generate')?.addEventListener('click', buildInpaintGeneration);
+  el('btn-inpaint-to-cleanup')?.addEventListener('click', sendInpaintToCleanup);
+  initInpaintBrush();
+  el('chk-inpaint-fast')?.addEventListener('change', event => {
+    const steps = el('num-inpaint-steps');
+    if (steps) steps.value = event.target.checked ? '10' : '20';
+  });
   el('select-layerdiffuse-speed-preset')?.addEventListener('change', event => {
     const preset = event.target.value;
     const steps = el('num-layerdiffuse-steps');
@@ -1401,6 +1408,14 @@ function syncFabricStencilSelects() {
     body.textContent = 'Body silhouette';
     layerSel.appendChild(body);
   }
+  const inpaintSel = el('select-inpaint-mask-stencil');
+  if (inpaintSel) {
+    inpaintSel.textContent = '';
+    const body = document.createElement('option');
+    body.value = '';
+    body.textContent = 'Body silhouette';
+    inpaintSel.appendChild(body);
+  }
   for (const stencil of editor.stencils) {
     if (nearSel) {
       const opt = document.createElement('option');
@@ -1419,6 +1434,12 @@ function syncFabricStencilSelects() {
       opt.value = stencil.id;
       opt.textContent = stencil.name;
       layerSel.appendChild(opt);
+    }
+    if (inpaintSel) {
+      const opt = document.createElement('option');
+      opt.value = stencil.id;
+      opt.textContent = stencil.name;
+      inpaintSel.appendChild(opt);
     }
   }
 }
@@ -1586,6 +1607,22 @@ function downloadFabricManifest() {
   URL.revokeObjectURL(url);
 }
 
+// ─── Generator → Cleanup helpers ─────────────────────────────────────────
+
+function _configureCleanupForGenerator() {
+  // Generator outputs (LayerDiffuse / CoreML) arrive as transparent PNGs.
+  // Pre-set the cleanup workbench to sensible defaults for that case so the
+  // user doesn't start with whatever lane was last active.
+  const lane = document.getElementById('select-cleanup-lane');
+  if (lane) lane.value = 'transparent_png';
+  const halo = document.getElementById('chk-cleanup-halo');
+  if (halo) halo.checked = true;
+  const islands = document.getElementById('chk-cleanup-islands');
+  if (islands) islands.checked = true;
+  const alphaRange = document.getElementById('range-cleanup-alpha-threshold');
+  if (alphaRange) { alphaRange.value = '20'; alphaRange.dispatchEvent(new Event('input')); }
+}
+
 // ─── Core ML Generator ───────────────────────────────────────────────────
 
 let _coremlResult = null;
@@ -1681,6 +1718,7 @@ async function sendCoreMLToCleanup() {
   for (let i = 0; i < byteStr.length; i++) view[i] = byteStr.charCodeAt(i);
   const seed = _coremlResult.metadata?.seed ?? 'seed';
   const blob = new Blob([ab], { type: 'image/png' });
+  _configureCleanupForGenerator();
   await receiveAssetForCleanup(blob, `coreml_${seed}.png`);
 }
 
@@ -1735,6 +1773,7 @@ async function buildLayerDiffuseGeneration() {
     fd.append('speed_preset', el('select-layerdiffuse-speed-preset')?.value || 'normal');
     fd.append('model', el('txt-layerdiffuse-model')?.value || 'digiplay/Juggernaut_final');
     fd.append('device', el('select-layerdiffuse-device')?.value || 'auto');
+    fd.append('clip_to_mask', el('chk-layerdiffuse-clip-mask')?.checked ? 'true' : 'false');
     fd.append('background', bodyBlob, 'body_composite.png');
     fd.append('mask', maskBlob, 'garment_mask.png');
 
@@ -1772,7 +1811,241 @@ async function sendLayerDiffuseToCleanup() {
   for (let i = 0; i < byteStr.length; i++) view[i] = byteStr.charCodeAt(i);
   const seed = _layerdiffuseResult.metadata?.seed ?? 'seed';
   const blob = new Blob([ab], { type: 'image/png' });
+  _configureCleanupForGenerator();
   await receiveAssetForCleanup(blob, `layerdiffuse_${seed}.png`);
+}
+
+// ─── Inpaint Garment Generator ────────────────────────────────────────────
+
+let _inpaintResult = null;
+
+// --- Inpaint brush ---
+const _brush = {
+  active: false,
+  erasing: false,
+  size: 32,
+  painting: false,
+  lastX: 0,
+  lastY: 0,
+};
+
+function _brushCanvas() { return document.getElementById('inpaint-brush-canvas'); }
+function _brushCtx() { return _brushCanvas()?.getContext('2d') ?? null; }
+
+function brushHasPaint() {
+  const c = _brushCanvas();
+  if (!c) return false;
+  const ctx = c.getContext('2d');
+  const d = ctx.getImageData(0, 0, c.width, c.height).data;
+  for (let i = 3; i < d.length; i += 4) { if (d[i] > 0) return true; }
+  return false;
+}
+
+function brushMaskToBlob() {
+  const src = _brushCanvas();
+  if (!src) return Promise.resolve(null);
+  const out = document.createElement('canvas');
+  out.width = src.width;
+  out.height = src.height;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, out.width, out.height);
+  const srcCtx = src.getContext('2d');
+  const pxData = srcCtx.getImageData(0, 0, src.width, src.height).data;
+  const maskData = ctx.getImageData(0, 0, out.width, out.height);
+  const md = maskData.data;
+  for (let i = 0; i < pxData.length; i += 4) {
+    if (pxData[i + 3] > 10) {
+      md[i] = 255; md[i + 1] = 255; md[i + 2] = 255; md[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(maskData, 0, 0);
+  return canvasToBlob(out);
+}
+
+function toggleInpaintBrush() {
+  const c = _brushCanvas();
+  const btn = el('btn-inpaint-brush-toggle');
+  if (!c || !btn) return;
+  _brush.active = !_brush.active;
+  if (_brush.active) {
+    c.classList.add('active');
+    btn.classList.add('painting');
+    btn.textContent = 'Stop Painting';
+  } else {
+    c.classList.remove('active');
+    btn.classList.remove('painting');
+    btn.textContent = 'Paint Mask';
+  }
+}
+
+function clearInpaintBrush() {
+  const c = _brushCanvas();
+  if (!c) return;
+  _brushCtx()?.clearRect(0, 0, c.width, c.height);
+}
+
+function _brushDraw(ctx, x, y, fromX, fromY) {
+  ctx.save();
+  if (_brush.erasing) {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.strokeStyle = 'rgba(0,0,0,1)';
+  } else {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = 'rgba(255, 80, 20, 0.55)';
+  }
+  ctx.lineWidth = _brush.size;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function _brushCanvasCoords(e) {
+  const c = _brushCanvas();
+  if (!c) return [0, 0];
+  const r = c.getBoundingClientRect();
+  const scaleX = c.width / r.width;
+  const scaleY = c.height / r.height;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return [(clientX - r.left) * scaleX, (clientY - r.top) * scaleY];
+}
+
+function initInpaintBrush() {
+  const c = _brushCanvas();
+  if (!c) return;
+
+  function onStart(e) {
+    if (!_brush.active) return;
+    e.preventDefault();
+    _brush.painting = true;
+    const [x, y] = _brushCanvasCoords(e);
+    _brush.lastX = x; _brush.lastY = y;
+    _brushDraw(_brushCtx(), x, y, x, y);
+  }
+
+  function onMove(e) {
+    if (!_brush.active || !_brush.painting) return;
+    e.preventDefault();
+    const [x, y] = _brushCanvasCoords(e);
+    _brushDraw(_brushCtx(), x, y, _brush.lastX, _brush.lastY);
+    _brush.lastX = x; _brush.lastY = y;
+  }
+
+  function onEnd() { _brush.painting = false; }
+
+  c.addEventListener('mousedown', onStart);
+  c.addEventListener('mousemove', onMove);
+  c.addEventListener('mouseup', onEnd);
+  c.addEventListener('mouseleave', onEnd);
+  c.addEventListener('touchstart', onStart, { passive: false });
+  c.addEventListener('touchmove', onMove, { passive: false });
+  c.addEventListener('touchend', onEnd);
+
+  el('btn-inpaint-brush-toggle')?.addEventListener('click', toggleInpaintBrush);
+
+  el('btn-inpaint-brush-erase')?.addEventListener('click', () => {
+    _brush.erasing = !_brush.erasing;
+    el('btn-inpaint-brush-erase')?.classList.toggle('erasing', _brush.erasing);
+  });
+
+  el('btn-inpaint-brush-clear')?.addEventListener('click', clearInpaintBrush);
+
+  el('range-inpaint-brush-size')?.addEventListener('input', e => {
+    _brush.size = parseInt(e.target.value, 10);
+    const lbl = el('lbl-inpaint-brush-size');
+    if (lbl) lbl.textContent = _brush.size;
+  });
+}
+// --- end inpaint brush ---
+
+function setInpaintStatus(msg, isError = false) {
+  const status = el('inpaint-status');
+  if (!status) return;
+  status.style.display = msg ? 'block' : 'none';
+  status.style.color = isError ? 'var(--danger-color)' : '';
+  status.textContent = msg || '';
+}
+
+async function maskBlobForInpaint() {
+  if (brushHasPaint()) return brushMaskToBlob();
+  const selectedId = el('select-inpaint-mask-stencil')?.value || '';
+  if (selectedId) {
+    const stencil = editor.stencils.find(s => s.id === selectedId);
+    if (stencil) return canvasToBlob(stencil.canvas);
+  }
+  throw new Error('No mask defined — paint a mask on the canvas or select a stencil below.');
+}
+
+async function buildInpaintGeneration() {
+  const prompt = (el('txt-inpaint-prompt')?.value || '').trim();
+  if (!prompt) { setInpaintStatus('Prompt is required.', true); return; }
+
+  const btn = el('btn-inpaint-generate');
+  if (btn) btn.disabled = true;
+  if (el('inpaint-result')) el('inpaint-result').style.display = 'none';
+  setInpaintStatus('Preparing inpaint inputs...');
+
+  try {
+    const [bodyCanvas, maskBlob] = await Promise.all([
+      generateBodyCompositeCanvas(),
+      maskBlobForInpaint(),
+    ]);
+    const bodyBlob = await canvasToBlob(bodyCanvas);
+
+    const fd = new FormData();
+    fd.append('prompt', prompt);
+    fd.append('negative_prompt', el('txt-inpaint-negative')?.value || '');
+    fd.append('seed', el('num-inpaint-seed')?.value || '93');
+    fd.append('steps', el('num-inpaint-steps')?.value || '20');
+    fd.append('guidance_scale', el('num-inpaint-guidance')?.value || '7');
+    fd.append('strength', el('num-inpaint-strength')?.value || '1.0');
+    fd.append('device', el('select-inpaint-device')?.value || 'auto');
+    fd.append('fast', el('chk-inpaint-fast')?.checked ? 'true' : 'false');
+    fd.append('model_repo', el('txt-inpaint-model-repo')?.value || '');
+    fd.append('image', bodyBlob, 'body_composite.png');
+    fd.append('mask', maskBlob, 'garment_mask.png');
+
+    setInpaintStatus('Running inpainting...');
+    const res = await fetch('/api/inpaint/generate', { method: 'POST', body: fd });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const d = await res.json(); detail = d.detail || detail; } catch {}
+      throw new Error(`HTTP ${res.status}: ${detail}`);
+    }
+    const data = await res.json();
+    _inpaintResult = data;
+
+    const preview = el('inpaint-preview-img');
+    if (preview) preview.src = `data:image/png;base64,${data.image_b64}`;
+    const meta = el('inpaint-meta');
+    if (meta) {
+      const m = data.metadata || {};
+      meta.textContent = `seed ${m.seed ?? ''} · ${m.steps ?? ''} steps${m.use_lcm ? ' (LCM)' : ''}`;
+    }
+    if (el('inpaint-result')) el('inpaint-result').style.display = 'block';
+    setInpaintStatus('');
+  } catch (err) {
+    setInpaintStatus(`Inpaint error: ${err.message || err}`, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function sendInpaintToCleanup() {
+  if (!_inpaintResult?.image_b64) return;
+  const byteStr = atob(_inpaintResult.image_b64);
+  const ab = new ArrayBuffer(byteStr.length);
+  const view = new Uint8Array(ab);
+  for (let i = 0; i < byteStr.length; i++) view[i] = byteStr.charCodeAt(i);
+  const seed = _inpaintResult.metadata?.seed ?? 'seed';
+  const blob = new Blob([ab], { type: 'image/png' });
+  _configureCleanupForGenerator();
+  await receiveAssetForCleanup(blob, `inpaint_${seed}.png`);
 }
 
 export async function initStencils() {

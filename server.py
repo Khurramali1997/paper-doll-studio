@@ -36,6 +36,11 @@ from compiler.layerdiffuse_bridge import (
     normalize_request as normalize_layerdiffuse_request,
     run_generation as run_layerdiffuse_generation,
 )
+from compiler.inpaint_bridge import (
+    InpaintRequest,
+    inpaint_status,
+    run_generation as run_inpaint_generation,
+)
 
 import io as _io
 import json as _json
@@ -474,6 +479,8 @@ async def layerdiffuse_generate_endpoint(
     height: int = Form(512),
     model: str = Form(""),
     device: str = Form("auto"),
+    alpha_threshold: int = Form(20),
+    clip_to_mask: bool = Form(False),
     background: Optional[UploadFile] = File(None),
     mask: Optional[UploadFile] = File(None),
 ):
@@ -523,6 +530,8 @@ async def layerdiffuse_generate_endpoint(
                 device=device,
                 background=bg_path,
                 mask=mask_path,
+                alpha_threshold=max(0, min(255, alpha_threshold)),
+                clip_to_mask=clip_to_mask,
             )
             effective_req = normalize_layerdiffuse_request(req)
             result = run_layerdiffuse_generation(effective_req, generated_path)
@@ -553,6 +562,81 @@ async def layerdiffuse_generate_endpoint(
         raise HTTPException(503, str(e))
     except Exception as e:
         raise HTTPException(500, f"LayerDiffuse generation failed: {e}")
+
+
+@app.get("/api/inpaint/status")
+async def inpaint_status_endpoint():
+    return JSONResponse(inpaint_status())
+
+
+@app.post("/api/inpaint/generate")
+async def inpaint_generate_endpoint(
+    prompt: str = Form(...),
+    negative_prompt: str = Form(""),
+    seed: int = Form(93),
+    steps: int = Form(20),
+    guidance_scale: float = Form(7.0),
+    strength: float = Form(1.0),
+    width: int = Form(512),
+    height: int = Form(512),
+    fast: bool = Form(True),
+    model_repo: str = Form(""),
+    device: str = Form("auto"),
+    image: UploadFile = File(...),
+    mask: UploadFile = File(...),
+):
+    """Inpaint a garment slot using Anything-v4.5-inpainting."""
+    prompt = prompt.strip()
+    if not prompt:
+        raise HTTPException(400, "Prompt is required")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="paperdoll_inpaint_") as tmp:
+            tmp_path = Path(tmp)
+            image_path = tmp_path / "body_composite.png"
+            mask_path = tmp_path / "garment_mask.png"
+            image_path.write_bytes(await image.read())
+            mask_path.write_bytes(await mask.read())
+
+            generated_dir = Path("public") / "assets" / "inpaint_generated"
+            generated_dir.mkdir(parents=True, exist_ok=True)
+            generated_name = f"inpaint_{seed}_{uuid.uuid4().hex[:8]}.png"
+            generated_path = generated_dir / generated_name
+
+            req = InpaintRequest(
+                prompt=prompt,
+                negative_prompt=negative_prompt.strip(),
+                seed=seed,
+                steps=steps,
+                guidance_scale=guidance_scale,
+                strength=max(0.0, min(1.0, strength)),
+                width=width,
+                height=height,
+                fast=fast,
+                model_repo=model_repo.strip() or os.environ.get("PAPERDOLL_INPAINT_MODEL_REPO", "Sanster/anything-4.0-inpainting"),
+                device=device,
+                image=image_path,
+                mask=mask_path,
+            )
+            result = run_inpaint_generation(req, generated_path)
+            return JSONResponse({
+                "success": True,
+                "image_b64": result["image_b64"],
+                "image_path": result["image_path"],
+                "metadata": {
+                    "prompt": prompt,
+                    "seed": seed,
+                    "steps": req.steps,
+                    "fast": fast,
+                    "model_repo": req.model_repo,
+                },
+            })
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Inpaint generation failed: {e}")
 
 
 @app.post("/api/cleanup-assist/lane-c")

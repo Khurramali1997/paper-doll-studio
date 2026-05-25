@@ -88,6 +88,10 @@ def parse_args():
     parser.add_argument("--height", type=int, default=512)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--cpu-offload", action="store_true")
+    parser.add_argument("--clip-to-mask", action="store_true",
+                        help="Clamp generated alpha to the provided mask (useful for overlays/tattoos).")
+    parser.add_argument("--alpha-threshold", type=int, default=20,
+                        help="Zero alpha values below this threshold (removes model noise). 0 disables.")
     return parser.parse_args()
 
 
@@ -144,6 +148,15 @@ def encode_condition(path: str, width: int, height: int):
     return tensor.float() * 2.0 - 1.0
 
 
+def apply_alpha_threshold(image: Image.Image, threshold: int) -> Image.Image:
+    """Zero out alpha values below threshold to remove transparent VAE decoder noise."""
+    if threshold <= 0 or image.mode != "RGBA":
+        return image
+    arr = np.array(image)
+    arr[:, :, 3] = np.where(arr[:, :, 3] >= threshold, arr[:, :, 3], 0)
+    return Image.fromarray(arr, mode="RGBA")
+
+
 def clamp_alpha_to_mask(image: Image.Image, mask_path: str) -> Image.Image:
     if not mask_path:
         return image
@@ -197,7 +210,9 @@ def main():
     )[0]
 
     result = images[0]
-    result = clamp_alpha_to_mask(result, args.mask)
+    if args.clip_to_mask:
+        result = clamp_alpha_to_mask(result, args.mask)
+    result = apply_alpha_threshold(result, args.alpha_threshold)
     result.save(output)
     print(output)
 

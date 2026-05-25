@@ -44,6 +44,8 @@ def test_default_command_uses_runner(monkeypatch, tmp_path):
     assert "4" in cmd
     assert "--guidance-scale" in cmd
     assert "1.0" in cmd
+    assert "--alpha-threshold" in cmd
+    assert "20" in cmd
 
 
 def test_default_command_requires_python(monkeypatch, tmp_path):
