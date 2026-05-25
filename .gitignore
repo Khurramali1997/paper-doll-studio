@@ -4,6 +4,7 @@ venv/
 __pycache__/
 .DS_Store
 *.pyc
+*.bak
 node_modules/
 *.egg-info/
 dist/

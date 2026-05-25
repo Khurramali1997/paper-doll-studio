@@ -5,8 +5,13 @@ build-backend = "setuptools.backends._legacy:_Backend"
 [project]
 name = "paperdoll-studio"
 version = "1.0.0"
-description = "Paper Doll Studio — local-first character customization pipeline"
+description = "Paper Doll Studio — local-first character customization pipeline for visual novel and game creators"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
+
+[project.urls]
+Homepage = "https://github.com/alikh/paperdoll"
+Repository = "https://github.com/alikh/paperdoll.git"
 dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",

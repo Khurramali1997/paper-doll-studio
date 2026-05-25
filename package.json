@@ -1,9 +1,14 @@
 {
   "name": "paperdoll-studio",
   "version": "1.0.0",
-  "private": true,
+  "license": "Apache-2.0",
   "type": "module",
-  "description": "Paper Doll Studio — local-first character customization tool",
+  "description": "Paper Doll Studio — local-first character customization pipeline for visual novel and game creators",
+  "homepage": "https://github.com/alikh/paperdoll",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alikh/paperdoll.git"
+  },
   "scripts": {
     "dev": "venv/bin/python server.py",
     "dev:reload": "venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000 --reload",
