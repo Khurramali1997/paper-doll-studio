@@ -1682,6 +1682,8 @@ async function buildCoreMLGeneration() {
     fd.append('mode', el('select-coreml-mode')?.value || 'txt2img');
     fd.append('enable_openpose', el('chk-coreml-openpose')?.checked ? 'true' : 'false');
     fd.append('enable_depth', el('chk-coreml-depth')?.checked ? 'true' : 'false');
+    fd.append('width', String(DOLL_CONFIG.canvas?.width || 512));
+    fd.append('height', String(DOLL_CONFIG.canvas?.height || 512));
     fd.append('silhouette', silBlob, 'body_silhouette.png');
     fd.append('body', bodyBlob, 'body_composite.png');
     fd.append('image', bodyBlob, 'init_image.png');
@@ -1777,6 +1779,8 @@ async function buildLayerDiffuseGeneration() {
     fd.append('model', el('txt-layerdiffuse-model')?.value || 'digiplay/Juggernaut_final');
     fd.append('device', el('select-layerdiffuse-device')?.value || 'auto');
     fd.append('clip_to_mask', el('chk-layerdiffuse-clip-mask')?.checked ? 'true' : 'false');
+    fd.append('width', String(DOLL_CONFIG.canvas?.width || 512));
+    fd.append('height', String(DOLL_CONFIG.canvas?.height || 512));
     fd.append('background', bodyBlob, 'body_composite.png');
     fd.append('mask', maskBlob, 'garment_mask.png');
 
@@ -2010,6 +2014,8 @@ async function buildInpaintGeneration() {
     fd.append('device', el('select-inpaint-device')?.value || 'auto');
     fd.append('fast', el('chk-inpaint-fast')?.checked ? 'true' : 'false');
     fd.append('model_repo', el('txt-inpaint-model-repo')?.value || '');
+    fd.append('width', String(DOLL_CONFIG.canvas?.width || 512));
+    fd.append('height', String(DOLL_CONFIG.canvas?.height || 512));
     fd.append('image', bodyBlob, 'body_composite.png');
     fd.append('mask', maskBlob, 'garment_mask.png');
 
