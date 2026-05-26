@@ -1808,7 +1808,7 @@ async function buildInpaintGeneration() {
     fd.append('fast', el('chk-inpaint-fast')?.checked ? 'true' : 'false');
     fd.append('feather', el('range-inpaint-feather')?.value || '8');
     fd.append('controlnet', el('chk-inpaint-controlnet')?.checked ? 'true' : 'false');
-    fd.append('controlnet_model', el('txt-inpaint-controlnet-model')?.value || 'lllyasviel/control_v11p_sd15_canny');
+    fd.append('controlnet_model', el('txt-inpaint-controlnet-model')?.value || 'lllyasviel/control_v11p_sd15_openpose');
     fd.append('controlnet_scale', el('range-inpaint-controlnet-scale')?.value || '0.5');
     fd.append('model_repo', el('txt-inpaint-model-repo')?.value || '');
     fd.append('width', String(DOLL_CONFIG.canvas?.width || 512));

@@ -334,7 +334,7 @@ async def inpaint_generate_endpoint(
     fast: bool = Form(True),
     feather: int = Form(8),
     controlnet: bool = Form(False),
-    controlnet_model: str = Form("lllyasviel/control_v11p_sd15_canny"),
+    controlnet_model: str = Form("lllyasviel/control_v11p_sd15_openpose"),
     controlnet_scale: float = Form(0.5),
     model_repo: str = Form(""),
     device: str = Form("auto"),

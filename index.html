@@ -320,11 +320,11 @@
                       </label>
                     </div>
                     <label class="switch-item"><span class="switch-label" title="DPM++ 2M Karras scheduler — converges in 10-12 steps vs 20+ for PNDM">Fast mode (DPM++)</span><input type="checkbox" id="chk-inpaint-fast" checked><span class="slider"></span></label>
-                    <label class="switch-item"><span class="switch-label" title="Canny edge ControlNet — helps the generated garment follow the body structure">Pose guidance (ControlNet)</span><input type="checkbox" id="chk-inpaint-controlnet"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label" title="DWPose skeleton ControlNet — guides the garment to follow the body pose (falls back to Canny if controlnet_aux is not installed)">Pose guidance (DWPose)</span><input type="checkbox" id="chk-inpaint-controlnet"><span class="slider"></span></label>
                     <div id="inpaint-controlnet-options" style="display: none; flex-direction: column; gap: 0.35rem; padding: 0.4rem; border-radius: 6px; background: rgba(120,80,255,0.06); border: 1px solid rgba(120,80,255,0.2);">
                       <div class="align-control">
                         <label for="txt-inpaint-controlnet-model" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">ControlNet model</label>
-                        <input type="text" id="txt-inpaint-controlnet-model" value="lllyasviel/control_v11p_sd15_canny" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem; outline: none;">
+                        <input type="text" id="txt-inpaint-controlnet-model" value="lllyasviel/control_v11p_sd15_openpose" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem; outline: none;">
                       </div>
                       <label style="font-size: 0.68rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;">
                         Conditioning scale
