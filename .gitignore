@@ -1,4 +1,5 @@
 venv/
+vendor/
 __pycache__/
 .DS_Store
 *.pyc
@@ -17,4 +18,16 @@ models/
 public/assets/compiled/
 public/assets/inpaint_generated/
 public/assets/wardrobe_manifest.json
+public/assets/body_ref.png
+public/assets/body_regions/
+public/assets/coreml_generated/
+public/assets/layerdiffuse_generated/
+
+# Extra virtual envs
+.venv-coreml/
+.venv-layerdiffuse/
+
+# Scratch / test assets
+sprite_hermione-01.png
+literature_see-through.pdf
 

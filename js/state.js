@@ -1,4 +1,3 @@
-import { isHandwearRight, isHandwearLeft } from './utils.js';
 
 export const TOGGLE_GROUPS = {
   'hair_front': { name: 'Front Hair (Bangs)', subcats: ['hair_front'] },
@@ -159,23 +158,9 @@ export function initializeState() {
 }
 
 function computeZForLayer(layer) {
-  let finalZ = layer.z;
-  if (layer.subcategory === 'handwear') {
-    const isClothing = layer.optionValue !== 'skin_wear';
-    const isRight = isHandwearRight(layer.id, layer.name);
-    const isLeft = isHandwearLeft(layer.id, layer.name);
-
-    if (isRight) {
-      finalZ = isClothing ? 15 : 14;
-    } else if (isLeft) {
-      finalZ = isClothing ? 260 : 259;
-    }
-  }
   const controls = state.layerControls[layer.id];
-  if (controls && Number.isFinite(controls.zOffset)) {
-    finalZ += controls.zOffset;
-  }
-  return finalZ;
+  const zOffset = (controls && Number.isFinite(controls.zOffset)) ? controls.zOffset : 0;
+  return layer.z + zOffset;
 }
 
 export function getActiveLayers() {
@@ -228,17 +213,10 @@ export function getBaseLayers() {
   return DOLL_CONFIG.layers.filter(layer => {
     if (layer.category === 'wardrobe') return layer.optionValue === 'skin_wear';
     return true;
-  }).map(l => {
-    let finalZ = l.z;
-    if (l.subcategory === 'handwear') {
-      const isClothing = l.optionValue !== 'skin_wear';
-      const isRight = isHandwearRight(l.id, l.name);
-      const isLeft = isHandwearLeft(l.id, l.name);
-      if (isRight) finalZ = isClothing ? 15 : 14;
-      else if (isLeft) finalZ = isClothing ? 260 : 259;
-    }
-    return { ...l, computedZ: finalZ };
-  }).sort((a, b) => a.computedZ - b.computedZ);
+  }).map(l => ({
+    ...l,
+    computedZ: computeZForLayer(l),
+  })).sort((a, b) => a.computedZ - b.computedZ);
 }
 
 // Save / Load character customization states

@@ -340,6 +340,87 @@ async def setup_body_ref(image: UploadFile = File(...)):
     return JSONResponse({"body_ref": str(out_path)})
 
 
+@app.post("/api/classify-garment")
+async def classify_garment_endpoint(
+    image: UploadFile = File(...),
+    model_type: str = Form("swinv2"),
+    device: str = Form("cpu"),
+):
+    """Predict the wardrobe slot for a garment image using WD tagger.
+
+    Returns JSON with slot, confidence, raw_class, is_ambiguous.
+    503 when tagger deps are not installed.
+    """
+    try:
+        from compiler.visual_classifier import classify_garment
+    except ImportError:
+        return JSONResponse(
+            {"error": "tagger deps not installed"},
+            status_code=503,
+        )
+
+    data = await image.read()
+    import io
+    from PIL import Image as _PIL
+    try:
+        pil_img = _PIL.open(io.BytesIO(data)).convert("RGB")
+    except Exception as exc:
+        return JSONResponse({"error": f"could not decode image: {exc}"}, status_code=400)
+
+    try:
+        result = classify_garment(pil_img, model_type=model_type, device=device)
+    except ImportError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    return JSONResponse(result)
+
+
+@app.post("/api/setup/parse-body-regions")
+async def parse_body_regions_endpoint(
+    image: UploadFile = File(...),
+    ckpt: str = Form("24yearsold/l2d_sam_iter2"),
+    device: str = Form("cpu"),
+):
+    """Run SemanticSam on the naked body reference and persist per-class masks.
+
+    Saves masks as PNG files under public/assets/body_regions/<class>.png.
+    Returns JSON list of saved paths.
+    503 when SAM deps are not installed.
+    """
+    try:
+        from compiler.body_parser import parse_body_regions, BODY_PARTS
+    except ImportError:
+        return JSONResponse({"error": "sam deps not installed"}, status_code=503)
+
+    data = await image.read()
+    import io
+    from PIL import Image as _PIL
+    try:
+        pil_img = _PIL.open(io.BytesIO(data)).convert("RGB")
+    except Exception as exc:
+        return JSONResponse({"error": f"could not decode image: {exc}"}, status_code=400)
+
+    try:
+        masks = parse_body_regions(pil_img, ckpt=ckpt, device=device)
+    except ImportError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    out_dir = Path("public") / "assets" / "body_regions"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for part_name, mask_img in masks.items():
+        out_path = out_dir / f"{part_name}.png"
+        mask_img.save(str(out_path))
+        saved.append(str(out_path))
+
+    return JSONResponse({"masks": saved, "parts": list(masks.keys())})
+
+
 @app.get("/api/inpaint/status")
 async def inpaint_status_endpoint():
     return JSONResponse(inpaint_status())

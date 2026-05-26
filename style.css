@@ -681,6 +681,17 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  max-height: 28rem;
+  overflow-y: auto;
+}
+
+.layer-drag-handle {
+  color: var(--text-secondary);
+  cursor: grab;
+  font-size: 1rem;
+  line-height: 1;
+  user-select: none;
+  padding: 0 0.1rem;
 }
 
 .wardrobe-layer-row {
@@ -1400,7 +1411,7 @@ select:focus {
 
 .stencil-editor-shell {
   width: 100%;
-  aspect-ratio: 1;
+  aspect-ratio: 1; /* overridden by JS after PSD load */
   max-height: 420px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-glass);

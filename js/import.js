@@ -1737,7 +1737,9 @@ export function initImport(targetContainer) {
   wireLivePreviewTriggers();
   wireCleanupWorkbench();
   wireBodyRefUpload();
+  wireParseBodyRegions();
   refreshBodyRefPreview();
+  if (DOLL_CONFIG?.body_ref) _showAutoRegionMasksButton(true);
 }
 
 function refreshBodyRefPreview() {
@@ -1768,10 +1770,54 @@ function wireBodyRefUpload() {
       const { body_ref } = await res.json();
       DOLL_CONFIG.body_ref = body_ref;
       refreshBodyRefPreview();
+      _showAutoRegionMasksButton(true);
     } catch (err) {
       if (status) status.textContent = `Upload failed: ${err.message}`;
     }
     input.value = '';
+  });
+}
+
+function _showAutoRegionMasksButton(show) {
+  const btn = document.getElementById('btn-parse-body-regions');
+  if (btn) btn.style.display = show ? '' : 'none';
+}
+
+function wireParseBodyRegions() {
+  const btn = document.getElementById('btn-parse-body-regions');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const statusEl = document.getElementById('body-regions-status');
+    if (!DOLL_CONFIG.body_ref) {
+      if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Set a body reference first.'; }
+      return;
+    }
+    btn.disabled = true;
+    if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Parsing body regions…'; }
+    try {
+      const imgRes = await fetch(DOLL_CONFIG.body_ref);
+      if (!imgRes.ok) throw new Error('Could not fetch body reference');
+      const imgBlob = await imgRes.blob();
+      const fd = new FormData();
+      fd.append('image', imgBlob, 'body_ref.png');
+      const res = await fetch('/api/setup/parse-body-regions', { method: 'POST', body: fd });
+      if (res.status === 503) {
+        if (statusEl) statusEl.textContent = 'SAM not installed — run: pip install "paperdoll-studio[sam]"';
+        return;
+      }
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || res.statusText);
+      }
+      const { parts } = await res.json();
+      if (statusEl) statusEl.textContent = `Regions saved: ${parts.join(', ')}`;
+      DOLL_CONFIG.body_regions_dir = 'public/assets/body_regions';
+      window.dispatchEvent(new CustomEvent('paperdoll:sam-regions-parsed', { detail: { parts } }));
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `Failed: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
   });
 }
 
@@ -1951,6 +1997,7 @@ async function loadAndParsePSD(file, targetContainer) {
 
       const layersConfig = [];
       const wardrobeMapping = {};
+      const psdLayerMasks = []; // {id, label, url} — layer masks found in the PSD
 
       for (let idx = 0; idx < rawLayers.length; idx++) {
         const layer = rawLayers[idx];
@@ -1966,6 +2013,22 @@ async function loadAndParsePSD(file, targetContainer) {
         const blob = await canvasToBlob(fullCanvas);
         const filename = `${cleanName}.png`;
         const objectUrl = URL.createObjectURL(blob);
+
+        // Extract pixel mask if the layer has one
+        if (layer.mask && layer.mask.canvas &&
+            layer.mask.canvas.width > 0 && layer.mask.canvas.height > 0) {
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = docWidth;
+          maskCanvas.height = docHeight;
+          const maskCtx = maskCanvas.getContext('2d');
+          const defaultFill = (layer.mask.defaultColor ?? 0) === 0 ? '#000000' : '#ffffff';
+          maskCtx.fillStyle = defaultFill;
+          maskCtx.fillRect(0, 0, docWidth, docHeight);
+          maskCtx.drawImage(layer.mask.canvas, layer.mask.left ?? 0, layer.mask.top ?? 0);
+          const maskBlob = await canvasToBlob(maskCanvas);
+          const maskUrl = URL.createObjectURL(maskBlob);
+          psdLayerMasks.push({ id: `psd:${cleanName}`, label: layer.name.trim(), url: maskUrl });
+        }
 
         cacheImage(filename, objectUrl, blob);
 
@@ -2060,8 +2123,9 @@ async function loadAndParsePSD(file, targetContainer) {
       DOLL_CONFIG.layers = layersConfig;
       DOLL_CONFIG.wardrobe = wardrobeConfig;
 
-      // Build naked body_ref: composite non-wardrobe layers (body, face, hair, eyes)
-      // so the inpaint model conditions on bare skin rather than existing clothing.
+      // Build naked body_ref: composite all PSD layers. The PSD uploaded at
+      // project setup is assumed to be the naked character. No name-based
+      // filtering — layer naming is too unpredictable to filter safely.
       try {
         const bodyRefCanvas = document.createElement('canvas');
         bodyRefCanvas.width = docWidth;
@@ -2070,7 +2134,6 @@ async function loadAndParsePSD(file, targetContainer) {
         brCtx.fillStyle = '#ffffff';
         brCtx.fillRect(0, 0, docWidth, docHeight);
         const bodyLayers = layersConfig
-          .filter(l => l.category !== 'wardrobe')
           .sort((a, b) => (a.z || 0) - (b.z || 0));
         for (const layer of bodyLayers) {
           const src = localImageCache[layer.file];
@@ -2078,14 +2141,11 @@ async function loadAndParsePSD(file, targetContainer) {
           try { brCtx.drawImage(await loadImage(src), 0, 0, docWidth, docHeight); } catch {}
         }
         const bodyRefBlob = await canvasToBlob(bodyRefCanvas);
-        const brFd = new FormData();
-        brFd.append('image', bodyRefBlob, 'body_ref.png');
-        const brRes = await fetch('/api/setup/body-ref', { method: 'POST', body: brFd });
-        if (brRes.ok) {
-          const { body_ref } = await brRes.json();
-          DOLL_CONFIG.body_ref = body_ref;
-          refreshBodyRefPreview();
-        }
+        // Keep as a blob URL — don't write to disk so it never clobbers
+        // a PNG the user explicitly uploaded via "Upload PNG".
+        DOLL_CONFIG.body_ref = URL.createObjectURL(bodyRefBlob);
+        refreshBodyRefPreview();
+        _showAutoRegionMasksButton(true);
       } catch (err) {
         console.warn('body_ref build failed:', err);
       }
@@ -2121,6 +2181,9 @@ async function loadAndParsePSD(file, targetContainer) {
       scheduleImportPreview();
 
       window.dispatchEvent(new CustomEvent('paperdoll:psd-loaded', { detail: { filename: file.name } }));
+      if (psdLayerMasks.length > 0) {
+        window.dispatchEvent(new CustomEvent('paperdoll:psd-masks-extracted', { detail: { masks: psdLayerMasks } }));
+      }
 
       psdProgressFill.style.width = '100%';
       txtPsdStatus.textContent = `PSD ${file.name} successfully imported!`;
@@ -2179,12 +2242,60 @@ function wireAssetIngest(targetContainer) {
   }
 }
 
+async function _autoClassifyGarment(file) {
+  const hint = document.getElementById('slot-ai-hint');
+  const select = document.getElementById('select-ingest-slot');
+  if (!hint || !select) return;
+
+  hint.style.display = 'inline';
+  hint.textContent = '(classifying…)';
+  hint.style.color = 'var(--text-secondary)';
+
+  try {
+    const fd = new FormData();
+    fd.append('image', file);
+    fd.append('model_type', 'swinv2');
+    fd.append('device', 'cpu');
+    const res = await fetch('/api/classify-garment', { method: 'POST', body: fd });
+    if (res.status === 503) {
+      hint.textContent = '(install: pip install timm pandas huggingface-hub)';
+      hint.style.color = 'var(--text-secondary)';
+      return;
+    }
+    if (!res.ok) {
+      hint.style.display = 'none';
+      return;
+    }
+    const data = await res.json();
+    if (!data.slot || data.confidence === 0) {
+      hint.style.display = 'none';
+      return;
+    }
+
+    if (data.is_ambiguous) {
+      hint.textContent = `(AI: bottomwear — pick pants/skirt/dress)`;
+      hint.style.color = '#e8a838';
+    } else {
+      select.value = data.slot;
+      const pct = Math.round(data.confidence * 100);
+      hint.textContent = `(AI: ${data.slot}, ${pct}% conf)`;
+      hint.style.color = '#6ec97a';
+    }
+  } catch {
+    hint.style.display = 'none';
+  }
+}
+
 async function handleAssetFileSelect(file, targetContainer) {
   clearFitPreview();
   _invalidateAICache();
   const assetDropText = document.getElementById('asset-drop-text');
   const txtIngestName = document.getElementById('txt-ingest-name');
   const btnIngestSubmit = document.getElementById('btn-ingest-submit');
+
+  // Reset AI hint from previous file
+  const hint = document.getElementById('slot-ai-hint');
+  if (hint) hint.style.display = 'none';
 
   setPendingAsset(file, null);
   setPendingPreviewImage(null);
@@ -2196,6 +2307,9 @@ async function handleAssetFileSelect(file, targetContainer) {
   }
 
   btnIngestSubmit.removeAttribute('disabled');
+
+  // Fire-and-forget: auto-classify doesn't block the UI
+  _autoClassifyGarment(file);
 
   try {
     const fileUrl = URL.createObjectURL(file);

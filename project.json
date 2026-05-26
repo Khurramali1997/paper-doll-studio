@@ -542,5 +542,6 @@
     "sourceFiles": [
       "character.psd"
     ]
-  }
+  },
+  "body_ref": "public/assets/body_ref.png"
 }

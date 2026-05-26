@@ -299,6 +299,9 @@
                       <label class="align-control">Seed
                         <input type="number" id="num-inpaint-seed" value="93" min="0" step="1">
                       </label>
+                      <label class="align-control">Max dim
+                        <input type="number" id="txt-inpaint-max-dim" value="768" min="256" max="2048" step="8" title="Longest edge is capped to this before sending to the model. Must be divisible by 8.">
+                      </label>
                       <label class="align-control">Steps
                         <input type="number" id="num-inpaint-steps" value="10" min="1" max="60" step="1">
                       </label>
@@ -595,7 +598,11 @@
                     <img id="body-ref-preview" style="display: none; width: 48px; height: 48px; object-fit: contain; border-radius: 4px; border: 1px solid var(--border-glass); background: rgba(255,255,255,0.05);" alt="body ref">
                     <div style="flex: 1;">
                       <div id="body-ref-status" style="font-size: 0.65rem; color: var(--text-secondary);">No body reference set — upload a PSD or a naked body PNG below.</div>
-                      <button type="button" class="cleanup-tool-btn" id="btn-body-ref-upload" style="margin-top: 0.3rem; font-size: 0.68rem;">Upload PNG</button>
+                      <div style="display: flex; gap: 0.4rem; margin-top: 0.3rem; flex-wrap: wrap;">
+                        <button type="button" class="cleanup-tool-btn" id="btn-body-ref-upload" style="font-size: 0.68rem;">Upload PNG</button>
+                        <button type="button" class="cleanup-tool-btn" id="btn-parse-body-regions" style="font-size: 0.68rem; display: none;">Auto-detect regions</button>
+                      </div>
+                      <div id="body-regions-status" style="display: none; font-size: 0.63rem; color: var(--text-secondary); margin-top: 0.3rem;"></div>
                       <input type="file" id="input-body-ref" accept="image/png,image/jpeg" style="display: none;">
                     </div>
                   </div>
@@ -640,7 +647,7 @@
 
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-bottom: 0.6rem;">
                 <div class="select-wrapper">
-                  <label for="select-ingest-slot" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Target Slot:</label>
+                  <label for="select-ingest-slot" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.2rem;">Target Slot: <span id="slot-ai-hint" style="display:none; font-size:0.65rem; color:var(--text-secondary); font-weight:normal;"></span></label>
                   <select id="select-ingest-slot" style="width: 100%; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.75rem; outline: none;">
                     <option value="topwear">Topwear</option>
                     <option value="bottomwear">Bottomwear</option>

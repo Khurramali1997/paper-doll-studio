@@ -61,23 +61,15 @@ async function _idbGetAll() {
   });
 }
 const MASKS = [
-  ['body_silhouette', 'Body silhouette'],
   ['character_composite', 'Character composite'],
-  ['topwear_allowed_region', 'Topwear allowed'],
-  ['top_allowed_region', 'Top allowed'],
-  ['outerwear_allowed_region', 'Outerwear allowed'],
-  ['dress_allowed_region', 'Dress allowed'],
-  ['torso_region', 'Torso region'],
-  ['leg_region', 'Leg region'],
-  ['pants_allowed_region', 'Pants allowed'],
-  ['skirt_allowed_region', 'Skirt allowed'],
-  ['legwear_allowed_region', 'Legwear allowed'],
-  ['shoe_allowed_region', 'Shoe allowed'],
-  ['dress_region', 'Dress region'],
-  ['shoe_region', 'Shoe region'],
-  ['face_forbidden_region', 'Face protected'],
-  ['hair_forbidden_region', 'Hair protected'],
 ];
+
+// SAM-generated body region masks — populated via registerSAMBodyRegions()
+const _samMasks = [];
+
+// PSD layer masks — populated via registerPSDLayerMasks() on psd-masks-extracted event
+const _psdMasks = [];           // [{id, label}]
+const _psdMaskUrls = new Map(); // id → object URL
 
 const editor = {
   canvas: null,
@@ -107,6 +99,20 @@ function docSize() {
 
 function maskPath(name) {
   return `base_rig/masks/${name}.png`;
+}
+
+function samMaskPath(part) {
+  return `public/assets/body_regions/${part}.png`;
+}
+
+function resizeEditorCanvas() {
+  const { width, height } = docSize();
+  const MAX = 360;
+  const scale = Math.min(MAX / width, MAX / height);
+  editor.canvas.width  = Math.round(width  * scale);
+  editor.canvas.height = Math.round(height * scale);
+  const shell = editor.canvas.closest('.stencil-editor-shell');
+  if (shell) shell.style.aspectRatio = `${width} / ${height}`;
 }
 
 function setStatus(message, isError = false) {
@@ -399,6 +405,28 @@ function syncSourceSelect() {
     option.textContent = label;
     select.appendChild(option);
   }
+  if (_psdMasks.length > 0) {
+    const group = document.createElement('optgroup');
+    group.label = 'PSD layer masks';
+    for (const { id, label } of _psdMasks) {
+      const option = document.createElement('option');
+      option.value = id;
+      option.textContent = label;
+      group.appendChild(option);
+    }
+    select.appendChild(group);
+  }
+  if (_samMasks.length > 0) {
+    const group = document.createElement('optgroup');
+    group.label = 'SAM body regions';
+    for (const [value, label] of _samMasks) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      group.appendChild(option);
+    }
+    select.appendChild(group);
+  }
 }
 
 function syncUserSelect() {
@@ -477,7 +505,16 @@ async function loadMaskCanvas(maskName) {
     return cloneCanvas(await generateBodyCompositeCanvas());
   }
   const { width, height } = docSize();
-  const image = await loadImage(maskPath(maskName));
+  let url;
+  if (maskName.startsWith('psd:')) {
+    url = _psdMaskUrls.get(maskName);
+    if (!url) throw new Error(`PSD mask not found: ${maskName}`);
+  } else if (maskName.startsWith('sam:')) {
+    url = samMaskPath(maskName.slice(4));
+  } else {
+    url = maskPath(maskName);
+  }
+  const image = await loadImage(url);
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -1816,8 +1853,13 @@ async function buildInpaintGeneration() {
     fd.append('controlnet_model', el('txt-inpaint-controlnet-model')?.value || 'lllyasviel/control_v11p_sd15_canny');
     fd.append('controlnet_scale', el('range-inpaint-controlnet-scale')?.value || '0.5');
     fd.append('model_repo', el('txt-inpaint-model-repo')?.value || '');
-    fd.append('width', String(DOLL_CONFIG.canvas?.width || 512));
-    fd.append('height', String(DOLL_CONFIG.canvas?.height || 512));
+    const snap8 = v => Math.max(8, Math.round(v / 8) * 8);
+    const inpaintMaxDim = parseInt(el('txt-inpaint-max-dim')?.value || '768', 10) || 768;
+    const rawW = DOLL_CONFIG.canvas?.width || 512;
+    const rawH = DOLL_CONFIG.canvas?.height || 512;
+    const scale = Math.min(1, inpaintMaxDim / Math.max(rawW, rawH));
+    fd.append('width', String(snap8(rawW * scale)));
+    fd.append('height', String(snap8(rawH * scale)));
     fd.append('image', bodyBlob, 'body_composite.png');
     fd.append('mask', maskBlob, 'garment_mask.png');
 
@@ -1895,14 +1937,82 @@ async function cancelInpaintJob() {
 
 async function sendInpaintToCleanup() {
   if (!_inpaintResult?.image_b64) return;
-  const byteStr = atob(_inpaintResult.image_b64);
-  const ab = new ArrayBuffer(byteStr.length);
-  const view = new Uint8Array(ab);
-  for (let i = 0; i < byteStr.length; i++) view[i] = byteStr.charCodeAt(i);
   const seed = _inpaintResult.metadata?.seed ?? 'seed';
-  const blob = new Blob([ab], { type: 'image/png' });
+
+  // Load the full inpainted result into a canvas
+  const resultImg = await loadImage('data:image/png;base64,' + _inpaintResult.image_b64);
+  const out = document.createElement('canvas');
+  out.width = resultImg.naturalWidth;
+  out.height = resultImg.naturalHeight;
+  const outCtx = out.getContext('2d');
+  outCtx.drawImage(resultImg, 0, 0);
+
+  let blob;
+  try {
+    // Apply the user-painted mask as the alpha channel so pixels outside
+    // the generated region become transparent. This lets the cleanup
+    // workbench operate only on the garment/tattoo/detail that was
+    // actually generated, regardless of whether it was clothes, a scar,
+    // an expression, etc. — the canvas position is preserved for alignment.
+    const maskBlob = await maskBlobForInpaint();
+    const maskUrl = URL.createObjectURL(maskBlob);
+    const maskImg = await loadImage(maskUrl);
+    URL.revokeObjectURL(maskUrl);
+
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = out.width;
+    maskCanvas.height = out.height;
+    const maskCtx = maskCanvas.getContext('2d');
+    maskCtx.drawImage(maskImg, 0, 0, out.width, out.height);
+
+    const resultData = outCtx.getImageData(0, 0, out.width, out.height);
+    const maskData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+    const rPx = resultData.data;
+    const mPx = maskData.data;
+    // Mask is white where the user painted (R=255), black elsewhere.
+    // Use R channel as alpha: painted region opaque, rest transparent.
+    for (let i = 0; i < rPx.length; i += 4) {
+      rPx[i + 3] = mPx[i];
+    }
+    outCtx.putImageData(resultData, 0, 0);
+    blob = await canvasToBlob(out);
+  } catch {
+    // No mask in memory (edge case) — fall back to full opaque result
+    blob = await canvasToBlob(out);
+  }
+
   _configureCleanupForGenerator();
   await receiveAssetForCleanup(blob, `inpaint_${seed}.png`);
+}
+
+export function registerPSDLayerMasks(masks) {
+  // Revoke previous session's object URLs to avoid memory leaks
+  for (const { id } of _psdMasks) {
+    const url = _psdMaskUrls.get(id);
+    if (url) URL.revokeObjectURL(url);
+  }
+  _psdMasks.length = 0;
+  _psdMaskUrls.clear();
+  for (const { id, label, url } of masks) {
+    _psdMasks.push({ id, label });
+    _psdMaskUrls.set(id, url);
+  }
+  syncSourceSelect();
+}
+
+export function registerSAMBodyRegions(parts) {
+  _samMasks.length = 0;
+  const labels = {
+    hair: 'Hair', headwear: 'Headwear', face: 'Face', eyes: 'Eyes',
+    eyewear: 'Eyewear', ears: 'Ears', earwear: 'Earwear', nose: 'Nose',
+    mouth: 'Mouth', neck: 'Neck', neckwear: 'Neckwear', topwear: 'Topwear',
+    handwear: 'Handwear', bottomwear: 'Bottomwear', legwear: 'Legwear',
+    footwear: 'Footwear', tail: 'Tail', wings: 'Wings', objects: 'Objects',
+  };
+  for (const part of parts) {
+    _samMasks.push([`sam:${part}`, labels[part] || part]);
+  }
+  syncSourceSelect();
 }
 
 export async function initStencils() {
@@ -1910,7 +2020,6 @@ export async function initStencils() {
   if (!editor.canvas) return;
   editor.ctx = editor.canvas.getContext('2d');
   syncSourceSelect();
-  await loadStoredStencils();
   syncUserSelect();
   bindEvents();
   setTool(editor.tool);
@@ -1925,14 +2034,20 @@ export async function initStencils() {
   drawEditor();
   renderGallery();
 
+  window.addEventListener('paperdoll:psd-masks-extracted', (e) => {
+    registerPSDLayerMasks(e.detail.masks);
+  });
+  window.addEventListener('paperdoll:sam-regions-parsed', (e) => {
+    registerSAMBodyRegions(e.detail.parts);
+  });
+
   window.addEventListener('paperdoll:psd-loaded', async () => {
-    const sourceName = el('select-stencil-source')?.value || 'body_silhouette';
-    if (sourceName === 'character_composite') {
-      try {
-        editor.sourceCanvas = await loadMaskCanvas(sourceName);
-        drawEditor();
-      } catch {}
-    }
+    // Resize editor canvas to match the loaded PSD aspect ratio
+    resizeEditorCanvas();
+    // Drop stale source canvas and PSD masks — new PSD may have different masks
+    editor.sourceCanvas = null;
+    registerPSDLayerMasks([]);
+    drawEditor();
     // Re-init anchors from new PSD layers
     tailorAnchors = extractAnchorPoints();
     _updateTailorAnchorUI();

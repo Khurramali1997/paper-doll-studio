@@ -50,6 +50,11 @@ export function getOptionValue(cleanName, slot, psdFileName = null) {
   }
   val = val.replace(/^_+|_+$/g, '');
 
+  // Purely positional/anatomical residuals (e.g. "upper_wear" → "upper") mean
+  // this layer is the naked base for its wardrobe slot, not actual clothing.
+  const BODY_RESIDUALS = new Set(['upper', 'lower', 'front', 'back', 'base', 'main', 'mid']);
+  if (BODY_RESIDUALS.has(val)) return 'skin_wear';
+
   if (!val) {
     if (psdFileName) {
       const fnLower = psdFileName.toLowerCase();
