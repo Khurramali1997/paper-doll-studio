@@ -276,154 +276,6 @@
               <div id="stencil-status" class="status-box stencil-status" style="display: none;"></div>
             </div>
 
-            <!-- Core ML Outfit Generator -->
-            <details class="control-group" id="details-coreml-generator" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
-              <summary style="cursor: pointer; font-weight: 600; font-size: 0.85rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
-                <span>Core ML Outfit Generator</span>
-                <span style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
-              </summary>
-              <div style="margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.45rem;">
-                <div class="align-control">
-                  <label for="txt-coreml-prompt" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Prompt</label>
-                  <textarea id="txt-coreml-prompt" rows="3" style="width: 100%; resize: vertical; padding: 0.4rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">red velvet evening gown, anime cel shaded, clean garment edges</textarea>
-                </div>
-
-                <details>
-                  <summary style="font-size: 0.65rem; color: var(--text-secondary); cursor: pointer; list-style: none;">Advanced</summary>
-                  <div style="margin-top: 0.45rem; display: flex; flex-direction: column; gap: 0.4rem;">
-                    <div class="align-control">
-                      <label for="txt-coreml-negative" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Negative prompt</label>
-                      <textarea id="txt-coreml-negative" rows="2" style="width: 100%; resize: vertical; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem; outline: none;">low quality, blurry, deformed, extra limbs, body paint, skin tight bodysuit, naked, watermark, text, logo, multiple people</textarea>
-                    </div>
-                    <div class="cleanup-control-grid">
-                      <label class="align-control">Mode
-                        <select id="select-coreml-mode" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;">
-                          <option value="txt2img">Text / ControlNet</option>
-                          <option value="image2image">Image-to-image</option>
-                          <option value="inpaint">Inpaint (custom runner)</option>
-                        </select>
-                      </label>
-                      <label class="align-control">Compute
-                        <select id="select-coreml-compute" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;">
-                          <option value="CPU_AND_NE">CPU_AND_NE</option>
-                          <option value="CPU_AND_GPU">CPU_AND_GPU</option>
-                          <option value="ALL">ALL</option>
-                        </select>
-                      </label>
-                      <label class="align-control">Seed
-                        <input type="number" id="num-coreml-seed" value="93" min="0" step="1">
-                      </label>
-                      <label class="align-control">Steps
-                        <input type="number" id="num-coreml-steps" value="28" min="1" max="80" step="1">
-                      </label>
-                      <label class="align-control">CFG
-                        <input type="number" id="num-coreml-guidance" value="7" min="0" max="20" step="0.1">
-                      </label>
-                      <label class="align-control">Mask stencil
-                        <select id="select-coreml-mask-stencil" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;"></select>
-                      </label>
-                    </div>
-                    <div style="display: flex; gap: 0.8rem; flex-wrap: wrap; font-size: 0.72rem; color: var(--text-secondary);">
-                      <label style="display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
-                        <input type="checkbox" id="chk-coreml-openpose"> OpenPose
-                      </label>
-                      <label style="display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
-                        <input type="checkbox" id="chk-coreml-depth"> Depth
-                      </label>
-                    </div>
-                    <div class="align-control">
-                      <label for="txt-coreml-model-version" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Model version</label>
-                      <input type="text" id="txt-coreml-model-version" value="runwayml/stable-diffusion-v1-5" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem; outline: none;">
-                    </div>
-                  </div>
-                </details>
-
-                <button type="button" class="action-btn accent" id="btn-coreml-generate" style="width: 100%; padding: 0.5rem 0; font-size: 0.8rem; border-radius: 6px;">Generate With Core ML</button>
-                <div id="coreml-status" class="status-box stencil-status" style="display: none;"></div>
-
-                <div id="coreml-result" style="display: none; margin-top: 0.4rem;">
-                  <img id="coreml-preview-img" width="140" height="140" style="border-radius: 6px; border: 1px solid var(--border-glass); object-fit: contain; background: rgba(255,255,255,0.04);" alt="Core ML preview">
-                  <div id="coreml-meta" style="font-size: 0.68rem; color: var(--text-secondary); margin-top: 0.3rem;"></div>
-                  <div style="display: flex; gap: 0.5rem; margin-top: 0.4rem;">
-                    <button type="button" class="cleanup-tool-btn" id="btn-coreml-to-cleanup">Send to Cleanup Workbench</button>
-                  </div>
-                </div>
-              </div>
-            </details>
-
-            <!-- LayerDiffuse Generator -->
-            <details class="control-group" id="details-layerdiffuse-generator" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
-              <summary style="cursor: pointer; font-weight: 600; font-size: 0.85rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
-                <span>LayerDiffuse Transparent Layer</span>
-                <span style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
-              </summary>
-              <div style="margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.45rem;">
-                <div class="align-control">
-                  <label for="txt-layerdiffuse-prompt" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Prompt</label>
-                  <textarea id="txt-layerdiffuse-prompt" rows="3" style="width: 100%; resize: vertical; padding: 0.4rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">red velvet evening gown garment layer, anime cel shaded, clean transparent edges</textarea>
-                </div>
-
-                <details>
-                  <summary style="font-size: 0.65rem; color: var(--text-secondary); cursor: pointer; list-style: none;">Advanced</summary>
-                  <div style="margin-top: 0.45rem; display: flex; flex-direction: column; gap: 0.4rem;">
-                    <div class="align-control">
-                      <label for="txt-layerdiffuse-negative" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Negative prompt</label>
-                      <textarea id="txt-layerdiffuse-negative" rows="2" style="width: 100%; resize: vertical; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem; outline: none;">low quality, blurry, deformed, extra limbs, body paint, skin tight bodysuit, naked, watermark, text, logo, multiple people</textarea>
-                    </div>
-                    <div class="cleanup-control-grid">
-                      <label class="align-control">Mode
-                        <select id="select-layerdiffuse-mode" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;">
-                          <option value="bg2fg">Skeleton to garment</option>
-                          <option value="fg_only">Transparent prompt only</option>
-                        </select>
-                      </label>
-                      <label class="align-control">Speed preset
-                        <select id="select-layerdiffuse-speed-preset" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;">
-                          <option value="normal">Normal</option>
-                          <option value="lcm">LCM 4-step</option>
-                        </select>
-                      </label>
-                      <label class="align-control">Device
-                        <select id="select-layerdiffuse-device" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;">
-                          <option value="auto">Auto</option>
-                          <option value="cpu">CPU</option>
-                          <option value="mps">MPS experimental</option>
-                        </select>
-                      </label>
-                      <label class="align-control">Seed
-                        <input type="number" id="num-layerdiffuse-seed" value="93" min="0" step="1">
-                      </label>
-                      <label class="align-control">Steps
-                        <input type="number" id="num-layerdiffuse-steps" value="24" min="4" max="60" step="1">
-                      </label>
-                      <label class="align-control">CFG
-                        <input type="number" id="num-layerdiffuse-guidance" value="7" min="0" max="20" step="0.1">
-                      </label>
-                      <label class="align-control">Mask stencil
-                        <select id="select-layerdiffuse-mask-stencil" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;"></select>
-                      </label>
-                    </div>
-                    <label class="switch-item"><span class="switch-label" title="Clip the generated alpha to the selected mask — useful for tattoos and overlays, leave off for free garment generation">Clip alpha to mask</span><input type="checkbox" id="chk-layerdiffuse-clip-mask"><span class="slider"></span></label>
-                    <div class="align-control">
-                      <label for="txt-layerdiffuse-model" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Base model</label>
-                      <input type="text" id="txt-layerdiffuse-model" value="digiplay/Juggernaut_final" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem; outline: none;">
-                    </div>
-                  </div>
-                </details>
-
-                <button type="button" class="action-btn accent" id="btn-layerdiffuse-generate" style="width: 100%; padding: 0.5rem 0; font-size: 0.8rem; border-radius: 6px;">Generate Transparent Layer</button>
-                <div id="layerdiffuse-status" class="status-box stencil-status" style="display: none;"></div>
-
-                <div id="layerdiffuse-result" style="display: none; margin-top: 0.4rem;">
-                  <img id="layerdiffuse-preview-img" width="140" height="140" style="border-radius: 6px; border: 1px solid var(--border-glass); object-fit: contain; background: rgba(255,255,255,0.04);" alt="LayerDiffuse preview">
-                  <div id="layerdiffuse-meta" style="font-size: 0.68rem; color: var(--text-secondary); margin-top: 0.3rem;"></div>
-                  <div style="display: flex; gap: 0.5rem; margin-top: 0.4rem;">
-                    <button type="button" class="cleanup-tool-btn" id="btn-layerdiffuse-to-cleanup">Send to Cleanup Workbench</button>
-                  </div>
-                </div>
-              </div>
-            </details>
-
             <!-- Inpaint Garment Generator -->
             <details class="control-group" id="details-inpaint-generator" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
               <summary style="cursor: pointer; font-weight: 600; font-size: 0.85rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
@@ -880,9 +732,18 @@
                       <label class="switch-item"><span class="switch-label">Proposal overlay</span><input type="checkbox" id="chk-cleanup-lane-c-overlay" checked><span class="slider"></span></label>
                       <label class="switch-item"><span class="switch-label">Use bg-remove as hint</span><input type="checkbox" id="chk-cleanup-lane-c-bg-remove"><span class="slider"></span></label>
                     </div>
+                    <div class="cleanup-control-grid" style="margin-top: 0.4rem;">
+                      <div class="align-control">
+                        <label for="range-cleanup-diff-threshold">Diff threshold <span id="val-cleanup-diff-threshold">30</span></label>
+                        <input type="range" id="range-cleanup-diff-threshold" min="1" max="120" value="30">
+                      </div>
+                    </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
                       <button type="button" class="action-btn secondary" id="btn-cleanup-lane-c-generate" style="font-size: 0.7rem; padding: 0.35rem 0;">Generate Assisted Mask</button>
                       <button type="button" class="action-btn" id="btn-cleanup-lane-c-apply" style="font-size: 0.7rem; padding: 0.35rem 0;">Apply Proposal</button>
+                    </div>
+                    <div style="margin-top: 0.35rem;">
+                      <button type="button" class="action-btn secondary" id="btn-cleanup-diff-doll" style="font-size: 0.7rem; padding: 0.35rem 0; width: 100%;">Diff Against Doll</button>
                     </div>
                     <div id="cleanup-lane-c-status" class="status-box" style="display: none; margin-top: 0.45rem; padding: 0.4rem; font-size: 0.66rem;"></div>
                   </div>

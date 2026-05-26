@@ -1,6 +1,4 @@
 venv/
-.venv-coreml/
-.venv-layerdiffuse/
 __pycache__/
 .DS_Store
 *.pyc
@@ -17,11 +15,6 @@ models/
 
 # Runtime-generated asset outputs (not source files)
 public/assets/compiled/
-public/assets/coreml_generated/
-public/assets/layerdiffuse_generated/
 public/assets/inpaint_generated/
 public/assets/wardrobe_manifest.json
 
-# Optional generation pipeline vendors
-vendor/ml-stable-diffusion/
-vendor/diffuser_layerdiffuse/

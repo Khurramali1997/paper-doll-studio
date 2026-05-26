@@ -1,4 +1,4 @@
-import { state, DOLL_CONFIG, TOGGLE_GROUPS, pushHistory } from './state.js';
+import { state, DOLL_CONFIG, TOGGLE_GROUPS, pushHistory, getActiveLayers } from './state.js';
 import {
   renderDoll, pendingAssetFile, pendingAssetImage, pendingPreviewImage, pendingPreviewIsBaked,
   setPendingAsset, setPendingPreviewImage, clearImageCache, cacheImage, localImageCache, alignSettings,
@@ -335,6 +335,9 @@ function cleanupControls() {
     laneCAssist: document.getElementById('cleanup-lane-c-assist'),
     laneCGenerate: document.getElementById('btn-cleanup-lane-c-generate'),
     laneCApply: document.getElementById('btn-cleanup-lane-c-apply'),
+    laneCDiffDoll: document.getElementById('btn-cleanup-diff-doll'),
+    laneCDiffThreshold: document.getElementById('range-cleanup-diff-threshold'),
+    laneCDiffThresholdVal: document.getElementById('val-cleanup-diff-threshold'),
     laneCStyle: document.getElementById('range-cleanup-lane-c-style'),
     laneCOverlay: document.getElementById('chk-cleanup-lane-c-overlay'),
     laneCApplyMode: document.getElementById('select-cleanup-lane-c-apply-mode'),
@@ -369,6 +372,7 @@ function syncCleanupControlLabels() {
   if (brush && c.brush) brush.textContent = c.brush.value;
   if (zoom && c.zoom) zoom.textContent = c.zoom.value;
   if (laneCStyle && c.laneCStyle) laneCStyle.textContent = c.laneCStyle.value;
+  if (c.laneCDiffThresholdVal && c.laneCDiffThreshold) c.laneCDiffThresholdVal.textContent = c.laneCDiffThreshold.value;
   if (stencilExpand && c.stencilExpand) stencilExpand.textContent = c.stencilExpand.value;
   if (stencilFeather && c.stencilFeather) stencilFeather.textContent = c.stencilFeather.value;
 }
@@ -490,12 +494,15 @@ async function initCleanupWorkbenchForImage(image) {
 }
 
 async function setPendingAssetFromCleanup() {
-  if (!cleanupState.candidateCanvas || !cleanupState.candidateImageData) return;
+  if (!cleanupState.initialized || !cleanupState.candidateCanvas || !cleanupState.candidateImageData) return;
   putCanvasImageData(cleanupState.candidateCanvas, cleanupState.candidateImageData);
   const blob = await canvasToBlob(cleanupState.candidateCanvas);
+  // Re-check after the await — clearCleanupWorkbench may have run while we awaited.
+  if (!cleanupState.initialized) return;
   const file = new File([blob], pendingAssetFile?.name || 'cleaned_asset.png', { type: 'image/png' });
   const url = URL.createObjectURL(blob);
   const image = await loadImage(url);
+  if (!cleanupState.initialized) return;
   setPendingAsset(file, image);
   setPendingPreviewImage(null);
   scheduleImportPreview();
@@ -578,6 +585,125 @@ async function generateLaneCProposal() {
     if (status) {
       status.style.color = 'var(--danger-color)';
       status.textContent = err.message || 'Cleanup assist failed.';
+    }
+  }
+}
+
+async function diffDollMask() {
+  if (!cleanupState.initialized || !cleanupState.sourceCanvas || !cleanupState.sourceImageData) return;
+  const c = cleanupControls();
+  const status = c.laneCStatus;
+  if (status) { status.style.display = 'block'; status.style.color = ''; status.textContent = 'Diffing against doll render…'; }
+
+  try {
+    const docW = DOLL_CONFIG.canvas?.width || 768;
+    const docH = DOLL_CONFIG.canvas?.height || 768;
+    const threshold = parseInt(c.laneCDiffThreshold?.value || '30', 10);
+
+    // Bake the source image to canvas coordinates so both sides of the diff
+    // are in the same spatial reference frame.
+    const clothedCanvas = document.createElement('canvas');
+    clothedCanvas.width = docW;
+    clothedCanvas.height = docH;
+    applyBakeTransform(clothedCanvas.getContext('2d'), cleanupState.sourceCanvas, docW, docH, alignSettings);
+    const clothedData = clothedCanvas.getContext('2d').getImageData(0, 0, docW, docH).data;
+
+    // Render the current doll layers (without the pending overlay) at canvas size.
+    const refCanvas = document.createElement('canvas');
+    refCanvas.width = docW;
+    refCanvas.height = docH;
+    const refCtx = refCanvas.getContext('2d');
+    for (const layer of getActiveLayers()) {
+      const src = localImageCache[layer.file];
+      if (!src) continue;
+      const img = await loadImage(src);
+      refCtx.drawImage(img, 0, 0, docW, docH);
+    }
+    const refData = refCanvas.getContext('2d').getImageData(0, 0, docW, docH).data;
+
+    // Build a canvas-resolution boolean diff mask.
+    const diffMask = new Uint8Array(docW * docH);
+    for (let i = 0, p = 0; i < clothedData.length; i += 4, p++) {
+      const srcA = clothedData[i + 3];
+      if (srcA < 10) continue;
+      const dr = Math.abs(clothedData[i]     - refData[i]);
+      const dg = Math.abs(clothedData[i + 1] - refData[i + 1]);
+      const db = Math.abs(clothedData[i + 2] - refData[i + 2]);
+      if ((dr + dg + db) / 3 >= threshold) diffMask[p] = 1;
+    }
+
+    // Map the canvas-resolution mask back to the source image resolution and
+    // apply it as an alpha mask on the current candidate.
+    const srcW = cleanupState.sourceImageData.width;
+    const srcH = cleanupState.sourceImageData.height;
+    const scaleX = docW / srcW;
+    const scaleY = docH / srcH;
+    const result = cloneCleanupImageData(cleanupState.sourceImageData);
+    const rd = result.data;
+
+    for (let y = 0; y < srcH; y++) {
+      for (let x = 0; x < srcW; x++) {
+        const pi = y * srcW + x;
+        const cx = Math.min(docW - 1, Math.round(x * scaleX));
+        const cy = Math.min(docH - 1, Math.round(y * scaleY));
+        if (!diffMask[cy * docW + cx]) {
+          rd[pi * 4 + 3] = 0;
+        }
+      }
+    }
+
+    _removeSmallIslandsFromImageData(result, 32);
+
+    cleanupState.undoStack.push({
+      candidate: cloneCleanupImageData(cleanupState.candidateImageData),
+      manualMask: cleanupState.manualMaskImageData ? cloneCleanupImageData(cleanupState.manualMaskImageData) : null,
+    });
+    cleanupState.candidateImageData = result;
+    cleanupState.operations = [...(cleanupState.operations || []), 'diff_doll'];
+    putCanvasImageData(cleanupState.candidateCanvas, result);
+    renderCleanupStencilOverlay();
+    await setPendingAssetFromCleanup();
+    await renderCleanupBodyPreview();
+    await updateCleanupWarnings();
+
+    const kept = Array.from({ length: rd.length / 4 }, (_, i) => rd[i * 4 + 3] > 0 ? 1 : 0).reduce((a, b) => a + b, 0);
+    const coverage = ((kept / (srcW * srcH)) * 100).toFixed(1);
+    if (status) status.textContent = `Diff applied — ${coverage}% coverage. Adjust threshold and re-run if needed.`;
+  } catch (err) {
+    console.warn('Diff doll failed:', err);
+    if (status) { status.style.color = 'var(--danger-color)'; status.textContent = err.message || 'Diff failed.'; }
+  }
+}
+
+function _removeSmallIslandsFromImageData(imageData, minArea) {
+  const { width, height, data } = imageData;
+  const visited = new Uint8Array(width * height);
+
+  const idx = (x, y) => y * width + x;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = idx(x, y);
+      if (visited[i] || data[i * 4 + 3] === 0) { visited[i] = 1; continue; }
+
+      // BFS to measure island size.
+      const island = [i];
+      visited[i] = 1;
+      let head = 0;
+      while (head < island.length) {
+        const cur = island[head++];
+        const cx = cur % width, cy = (cur / width) | 0;
+        for (const [nx, ny] of [[cx-1,cy],[cx+1,cy],[cx,cy-1],[cx,cy+1]]) {
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const ni = idx(nx, ny);
+          if (visited[ni] || data[ni * 4 + 3] === 0) continue;
+          visited[ni] = 1;
+          island.push(ni);
+        }
+      }
+      if (island.length < minArea) {
+        for (const pi of island) data[pi * 4 + 3] = 0;
+      }
     }
   }
 }
@@ -675,6 +801,7 @@ async function applyCleanupFromControls({ preserveManual = true } = {}) {
     }
   }
 
+  if (!cleanupState.initialized) return;
   cleanupState.sourceLane = c.lane?.value || 'transparent_png';
   cleanupState.operations = operations;
   cleanupState.mlAssist = null;
@@ -1229,6 +1356,11 @@ function clearCleanupWorkbench() {
   clearFitPreview();
 
   cleanupState.initialized = false;
+  cleanupState.sourceImageData = null;
+  cleanupState.candidateImageData = null;
+  cleanupState.candidateCanvas = null;
+  cleanupState.sourceCanvas = null;
+  cleanupState.manualMaskImageData = null;
   cleanupState.proposalStats = null;
   cleanupState.proposalImageData = null;
   cleanupState.mlAssist = null;
@@ -1311,6 +1443,12 @@ function wireCleanupWorkbench() {
   }
   if (c.laneCApply) {
     c.laneCApply.addEventListener('click', applyLaneCProposal);
+  }
+  if (c.laneCDiffDoll) {
+    c.laneCDiffDoll.addEventListener('click', diffDollMask);
+  }
+  if (c.laneCDiffThreshold) {
+    c.laneCDiffThreshold.addEventListener('input', syncCleanupControlLabels);
   }
   if (c.customStencilUpload && c.customStencilInput) {
     c.customStencilUpload.addEventListener('click', () => c.customStencilInput.click());
@@ -2141,12 +2279,16 @@ async function processIngest(targetContainer, assetDropText, txtIngestName) {
       }
     }
 
-    state.wardrobe[slot] = cleanName;
+    const currentSelection = state.wardrobe[slot];
+    const noSelection = !currentSelection || currentSelection === 'none' || currentSelection === 'skin_wear';
+    if (noSelection) {
+      state.wardrobe[slot] = cleanName;
+    }
 
     _invalidateAICache();
 
     buildUI(targetContainer);
-    renderDoll(targetContainer);
+    if (noSelection) renderDoll(targetContainer);
     updateCalibrateUI();
 
     clearCleanupWorkbench();
