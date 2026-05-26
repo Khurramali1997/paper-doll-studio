@@ -316,6 +316,30 @@ def _save_pil_png(img: _PILImage.Image, path: str):
 
 
 
+@app.post("/api/setup/body-ref")
+async def setup_body_ref(image: UploadFile = File(...)):
+    """Persist the naked body reference image used for inpaint conditioning.
+
+    Saves to public/assets/body_ref.png and stamps body_ref into project.json
+    so the path survives page reloads.
+    """
+    data = await image.read()
+    out_path = Path("public") / "assets" / "body_ref.png"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(data)
+
+    project_json = Path("project.json")
+    if project_json.exists():
+        try:
+            project = json.loads(project_json.read_text())
+            project["body_ref"] = str(out_path)
+            project_json.write_text(json.dumps(project, indent=2))
+        except Exception:
+            pass
+
+    return JSONResponse({"body_ref": str(out_path)})
+
+
 @app.get("/api/inpaint/status")
 async def inpaint_status_endpoint():
     return JSONResponse(inpaint_status())

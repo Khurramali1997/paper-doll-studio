@@ -1736,6 +1736,43 @@ export function initImport(targetContainer) {
   wireAutoAlign(targetContainer);
   wireLivePreviewTriggers();
   wireCleanupWorkbench();
+  wireBodyRefUpload();
+  refreshBodyRefPreview();
+}
+
+function refreshBodyRefPreview() {
+  const preview = document.getElementById('body-ref-preview');
+  const status = document.getElementById('body-ref-status');
+  const ref = DOLL_CONFIG?.body_ref;
+  if (!ref || !preview || !status) return;
+  preview.src = ref;
+  preview.style.display = 'block';
+  status.textContent = ref.startsWith('blob:') ? 'From PSD (session)' : ref;
+}
+
+function wireBodyRefUpload() {
+  const btn = document.getElementById('btn-body-ref-upload');
+  const input = document.getElementById('input-body-ref');
+  if (!btn || !input) return;
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const status = document.getElementById('body-ref-status');
+    if (status) status.textContent = 'Uploading…';
+    try {
+      const fd = new FormData();
+      fd.append('image', file, 'body_ref.png');
+      const res = await fetch('/api/setup/body-ref', { method: 'POST', body: fd });
+      if (!res.ok) throw new Error(res.statusText);
+      const { body_ref } = await res.json();
+      DOLL_CONFIG.body_ref = body_ref;
+      refreshBodyRefPreview();
+    } catch (err) {
+      if (status) status.textContent = `Upload failed: ${err.message}`;
+    }
+    input.value = '';
+  });
 }
 
 function wireLivePreviewTriggers() {
@@ -2022,6 +2059,36 @@ async function loadAndParsePSD(file, targetContainer) {
       DOLL_CONFIG.canvas = { width: docWidth, height: docHeight };
       DOLL_CONFIG.layers = layersConfig;
       DOLL_CONFIG.wardrobe = wardrobeConfig;
+
+      // Build naked body_ref: composite non-wardrobe layers (body, face, hair, eyes)
+      // so the inpaint model conditions on bare skin rather than existing clothing.
+      try {
+        const bodyRefCanvas = document.createElement('canvas');
+        bodyRefCanvas.width = docWidth;
+        bodyRefCanvas.height = docHeight;
+        const brCtx = bodyRefCanvas.getContext('2d');
+        brCtx.fillStyle = '#ffffff';
+        brCtx.fillRect(0, 0, docWidth, docHeight);
+        const bodyLayers = layersConfig
+          .filter(l => l.category !== 'wardrobe')
+          .sort((a, b) => (a.z || 0) - (b.z || 0));
+        for (const layer of bodyLayers) {
+          const src = localImageCache[layer.file];
+          if (!src) continue;
+          try { brCtx.drawImage(await loadImage(src), 0, 0, docWidth, docHeight); } catch {}
+        }
+        const bodyRefBlob = await canvasToBlob(bodyRefCanvas);
+        const brFd = new FormData();
+        brFd.append('image', bodyRefBlob, 'body_ref.png');
+        const brRes = await fetch('/api/setup/body-ref', { method: 'POST', body: brFd });
+        if (brRes.ok) {
+          const { body_ref } = await brRes.json();
+          DOLL_CONFIG.body_ref = body_ref;
+          refreshBodyRefPreview();
+        }
+      } catch (err) {
+        console.warn('body_ref build failed:', err);
+      }
 
       const dollContainer = document.getElementById('doll-container');
       if (dollContainer) {

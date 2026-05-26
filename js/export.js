@@ -69,10 +69,19 @@ export async function generateBodyCompositeCanvas() {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, docW, docH);
 
-  // Composite every layer of the rig at full RGB. The PSDs we ingest are
-  // clothing-covered (no separate anatomy layers), so the composite is a
-  // dressed figure suitable for ML conditioning. Drawn at native pixel
-  // dimensions — no scaling so the ML models see the rig's intended pose.
+  // Preferred path: use the pre-built naked body reference so the inpaint
+  // model sees bare skin rather than existing clothing.
+  if (DOLL_CONFIG.body_ref) {
+    try {
+      const img = await loadImage(DOLL_CONFIG.body_ref);
+      ctx.drawImage(img, 0, 0, docW, docH);
+      return canvas;
+    } catch (err) {
+      console.warn('body_ref load failed, falling back to layer composite:', err);
+    }
+  }
+
+  // Fallback: composite non-wardrobe layers (old behaviour, dressed figure).
   const layers = [...DOLL_CONFIG.layers].sort((a, b) => (a.z || 0) - (b.z || 0));
   for (const layer of layers) {
     if (ML_BODY_EXCLUDED_CATEGORIES.has(layer.category)) continue;

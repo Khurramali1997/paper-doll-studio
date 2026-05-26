@@ -187,6 +187,7 @@ def write_project_json(layers_config, wardrobe_config, psd_path, output_path):
     project_data = {
         "version": 1,
         "canvas": {"width": 768, "height": 768},
+        "body_ref": "base_rig/body_base.png",
         "layers": layers_config,
         "wardrobe": wardrobe_config,
         "defaults": {
