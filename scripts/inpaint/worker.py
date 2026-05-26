@@ -122,6 +122,7 @@ async def generate(
     height: int = Form(512),
     fast: bool = Form(True),
     feather: int = Form(8),
+    dilate: int = Form(6),
     controlnet: bool = Form(False),
     controlnet_model: str = Form("lllyasviel/control_v11p_sd15_canny"),
     controlnet_scale: float = Form(0.5),
@@ -157,6 +158,13 @@ async def generate(
             size = (width, height)
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize(size, Image.Resampling.LANCZOS)
             msk = Image.open(io.BytesIO(mask_bytes)).convert("L").resize(size, Image.Resampling.LANCZOS)
+            if dilate > 0:
+                import cv2
+                import numpy as np
+                kernel = cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (dilate * 2 + 1, dilate * 2 + 1)
+                )
+                msk = Image.fromarray(cv2.dilate(np.array(msk), kernel))
             if feather > 0:
                 msk = msk.filter(ImageFilter.GaussianBlur(radius=feather))
 
@@ -183,6 +191,7 @@ async def generate(
                 guidance_scale=guidance_scale,
                 strength=max(0.0, min(1.0, strength)),
                 generator=generator,
+                padding_mask_crop=32,
                 callback_on_step_end=on_step,
             )
             if controlnet:

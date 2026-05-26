@@ -33,6 +33,7 @@ class InpaintRequest:
     height: int = 512
     fast: bool = True
     feather: int = 8
+    dilate: int = 6
     controlnet: bool = False
     controlnet_model: str = "lllyasviel/control_v11p_sd15_canny"
     controlnet_scale: float = 0.5
@@ -133,6 +134,7 @@ async def submit_to_worker(req: InpaintRequest) -> str:
         "height": str(req.height),
         "fast": "true" if req.fast else "false",
         "feather": str(req.feather),
+        "dilate": str(req.dilate),
         "controlnet": "true" if req.controlnet else "false",
         "controlnet_model": req.controlnet_model,
         "controlnet_scale": str(req.controlnet_scale),

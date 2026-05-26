@@ -1730,6 +1730,10 @@ function initInpaintBrush() {
     const lbl = el('lbl-inpaint-brush-size');
     if (lbl) lbl.textContent = _brush.size;
   });
+  el('range-inpaint-dilate')?.addEventListener('input', e => {
+    const lbl = el('lbl-inpaint-dilate');
+    if (lbl) lbl.textContent = e.target.value;
+  });
   el('range-inpaint-feather')?.addEventListener('input', e => {
     const lbl = el('lbl-inpaint-feather');
     if (lbl) lbl.textContent = e.target.value;
@@ -1806,6 +1810,7 @@ async function buildInpaintGeneration() {
     fd.append('strength', el('num-inpaint-strength')?.value || '1.0');
     fd.append('device', el('select-inpaint-device')?.value || 'auto');
     fd.append('fast', el('chk-inpaint-fast')?.checked ? 'true' : 'false');
+    fd.append('dilate', el('range-inpaint-dilate')?.value || '6');
     fd.append('feather', el('range-inpaint-feather')?.value || '8');
     fd.append('controlnet', el('chk-inpaint-controlnet')?.checked ? 'true' : 'false');
     fd.append('controlnet_model', el('txt-inpaint-controlnet-model')?.value || 'lllyasviel/control_v11p_sd15_canny');
