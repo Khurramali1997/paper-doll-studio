@@ -15,6 +15,7 @@ Repository = "https://github.com/alikh/paperdoll.git"
 dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
+    "httpx>=0.25.0",
     "pillow>=10.0.0",
     "psd-tools>=1.0.0",
     "rembg[cpu]>=2.0.0",

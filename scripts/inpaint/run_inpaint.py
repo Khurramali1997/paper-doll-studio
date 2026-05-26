@@ -14,7 +14,7 @@ from pathlib import Path
 
 import torch
 from diffusers import DPMSolverMultistepScheduler, StableDiffusionInpaintPipeline
-from PIL import Image
+from PIL import Image, ImageFilter
 
 
 DEFAULT_MODEL_REPO = "Sanster/anything-4.0-inpainting"
@@ -42,6 +42,8 @@ def parse_args():
                         help="How much to repaint the masked region (1.0 = fully repaint)")
     parser.add_argument("--width", type=int, default=512)
     parser.add_argument("--height", type=int, default=512)
+    parser.add_argument("--feather", type=int, default=8,
+                        help="Gaussian blur radius applied to mask edges (0 = off)")
     parser.add_argument("--device", default="auto")
     return parser.parse_args()
 
@@ -86,6 +88,8 @@ def main():
     size = (args.width, args.height)
     image = Image.open(args.image).convert("RGB").resize(size, Image.Resampling.LANCZOS)
     mask = Image.open(args.mask).convert("L").resize(size, Image.Resampling.LANCZOS)
+    if args.feather > 0:
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=args.feather))
 
     steps = min(args.steps, 12) if args.fast else args.steps
     guidance = args.guidance_scale

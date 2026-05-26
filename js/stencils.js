@@ -1730,6 +1730,18 @@ function initInpaintBrush() {
     const lbl = el('lbl-inpaint-brush-size');
     if (lbl) lbl.textContent = _brush.size;
   });
+  el('range-inpaint-feather')?.addEventListener('input', e => {
+    const lbl = el('lbl-inpaint-feather');
+    if (lbl) lbl.textContent = e.target.value;
+  });
+  el('chk-inpaint-controlnet')?.addEventListener('change', e => {
+    const opts = el('inpaint-controlnet-options');
+    if (opts) opts.style.display = e.target.checked ? 'flex' : 'none';
+  });
+  el('range-inpaint-controlnet-scale')?.addEventListener('input', e => {
+    const lbl = el('lbl-inpaint-controlnet-scale');
+    if (lbl) lbl.textContent = parseFloat(e.target.value).toFixed(2);
+  });
 }
 // --- end inpaint brush ---
 
@@ -1739,6 +1751,19 @@ function setInpaintStatus(msg, isError = false) {
   status.style.display = msg ? 'block' : 'none';
   status.style.color = isError ? 'var(--danger-color)' : '';
   status.textContent = msg || '';
+}
+
+function setInpaintProgress(fraction) {
+  const wrap = el('inpaint-progress-wrap');
+  const bar = el('inpaint-progress-bar');
+  if (!wrap || !bar) return;
+  if (fraction <= 0) {
+    wrap.style.display = 'none';
+    bar.style.width = '0%';
+  } else {
+    wrap.style.display = 'block';
+    bar.style.width = `${Math.round(Math.min(fraction, 1) * 100)}%`;
+  }
 }
 
 async function maskBlobForInpaint() {
@@ -1751,14 +1776,19 @@ async function maskBlobForInpaint() {
   throw new Error('No mask defined — paint a mask on the canvas or select a stencil below.');
 }
 
+let _currentInpaintJobId = null;
+
 async function buildInpaintGeneration() {
   const prompt = (el('txt-inpaint-prompt')?.value || '').trim();
   if (!prompt) { setInpaintStatus('Prompt is required.', true); return; }
 
   const btn = el('btn-inpaint-generate');
+  const cancelBtn = el('btn-inpaint-cancel');
   if (btn) btn.disabled = true;
+  if (cancelBtn) { cancelBtn.style.display = 'inline-block'; cancelBtn.onclick = cancelInpaintJob; }
   if (el('inpaint-result')) el('inpaint-result').style.display = 'none';
-  setInpaintStatus('Preparing inpaint inputs...');
+  setInpaintProgress(0);
+  setInpaintStatus('Preparing inputs…');
 
   try {
     const [bodyCanvas, maskBlob] = await Promise.all([
@@ -1776,36 +1806,86 @@ async function buildInpaintGeneration() {
     fd.append('strength', el('num-inpaint-strength')?.value || '1.0');
     fd.append('device', el('select-inpaint-device')?.value || 'auto');
     fd.append('fast', el('chk-inpaint-fast')?.checked ? 'true' : 'false');
+    fd.append('feather', el('range-inpaint-feather')?.value || '8');
+    fd.append('controlnet', el('chk-inpaint-controlnet')?.checked ? 'true' : 'false');
+    fd.append('controlnet_model', el('txt-inpaint-controlnet-model')?.value || 'lllyasviel/control_v11p_sd15_canny');
+    fd.append('controlnet_scale', el('range-inpaint-controlnet-scale')?.value || '0.5');
     fd.append('model_repo', el('txt-inpaint-model-repo')?.value || '');
     fd.append('width', String(DOLL_CONFIG.canvas?.width || 512));
     fd.append('height', String(DOLL_CONFIG.canvas?.height || 512));
     fd.append('image', bodyBlob, 'body_composite.png');
     fd.append('mask', maskBlob, 'garment_mask.png');
 
-    setInpaintStatus('Running inpainting...');
+    setInpaintStatus('Starting worker… (first run loads the model, may take a minute)');
     const res = await fetch('/api/inpaint/generate', { method: 'POST', body: fd });
     if (!res.ok) {
       let detail = res.statusText;
       try { const d = await res.json(); detail = d.detail || detail; } catch {}
       throw new Error(`HTTP ${res.status}: ${detail}`);
     }
-    const data = await res.json();
-    _inpaintResult = data;
+    const { job_id } = await res.json();
+    _currentInpaintJobId = job_id;
+    setInpaintStatus('Running inpainting…');
 
-    const preview = el('inpaint-preview-img');
-    if (preview) preview.src = `data:image/png;base64,${data.image_b64}`;
-    const meta = el('inpaint-meta');
-    if (meta) {
-      const m = data.metadata || {};
-      meta.textContent = `seed ${m.seed ?? ''} · ${m.steps ?? ''} steps${m.use_lcm ? ' (LCM)' : ''}`;
-    }
-    if (el('inpaint-result')) el('inpaint-result').style.display = 'block';
-    setInpaintStatus('');
+    await new Promise((resolve, reject) => {
+      const evtSource = new EventSource(`/api/inpaint/progress/${job_id}`);
+      evtSource.onmessage = (e) => {
+        let event;
+        try { event = JSON.parse(e.data); } catch { return; }
+
+        if (event.type === 'progress') {
+          setInpaintProgress(event.step / event.total);
+          setInpaintStatus(`Step ${event.step} / ${event.total}…`);
+
+        } else if (event.type === 'result') {
+          evtSource.close();
+          _inpaintResult = event;
+          const preview = el('inpaint-preview-img');
+          if (preview) preview.src = `data:image/png;base64,${event.image_b64}`;
+          const meta = el('inpaint-meta');
+          if (meta) {
+            const m = event.metadata || {};
+            const cnTag = m.controlnet ? ' · ControlNet' : '';
+            meta.textContent = `seed ${m.seed ?? ''} · ${m.steps ?? ''} steps${cnTag}`;
+          }
+          if (el('inpaint-result')) el('inpaint-result').style.display = 'block';
+          setInpaintStatus('');
+          setInpaintProgress(0);
+          resolve();
+
+        } else if (event.type === 'cancelled') {
+          evtSource.close();
+          setInpaintStatus('Cancelled.');
+          setInpaintProgress(0);
+          resolve();
+
+        } else if (event.type === 'error') {
+          evtSource.close();
+          reject(new Error(event.message));
+        }
+      };
+      evtSource.onerror = () => {
+        evtSource.close();
+        reject(new Error('Lost connection to generation stream'));
+      };
+    });
   } catch (err) {
     setInpaintStatus(`Inpaint error: ${err.message || err}`, true);
+    setInpaintProgress(0);
   } finally {
+    _currentInpaintJobId = null;
     if (btn) btn.disabled = false;
+    if (cancelBtn) cancelBtn.style.display = 'none';
   }
+}
+
+async function cancelInpaintJob() {
+  const jobId = _currentInpaintJobId;
+  if (!jobId) return;
+  setInpaintStatus('Cancelling…');
+  try {
+    await fetch(`/api/inpaint/cancel/${jobId}`, { method: 'POST' });
+  } catch {}
 }
 
 async function sendInpaintToCleanup() {

@@ -18,7 +18,7 @@ import mimetypes
 from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from compiler.category_registry import ALL_CATEGORIES
@@ -33,6 +33,10 @@ from compiler.inpaint_bridge import (
     InpaintRequest,
     inpaint_status,
     run_generation as run_inpaint_generation,
+    ensure_worker,
+    submit_to_worker,
+    cancel_worker_job,
+    _worker_base_url,
 )
 
 import io as _io
@@ -328,15 +332,21 @@ async def inpaint_generate_endpoint(
     width: int = Form(512),
     height: int = Form(512),
     fast: bool = Form(True),
+    feather: int = Form(8),
+    controlnet: bool = Form(False),
+    controlnet_model: str = Form("lllyasviel/control_v11p_sd15_canny"),
+    controlnet_scale: float = Form(0.5),
     model_repo: str = Form(""),
     device: str = Form("auto"),
     image: UploadFile = File(...),
     mask: UploadFile = File(...),
 ):
-    """Inpaint a garment slot using Anything-v4.5-inpainting."""
+    """Submit an inpaint job to the warm worker. Returns {job_id} for SSE streaming."""
     prompt = prompt.strip()
     if not prompt:
         raise HTTPException(400, "Prompt is required")
+
+    resolved_repo = model_repo.strip() or os.environ.get("PAPERDOLL_INPAINT_MODEL_REPO", "Sanster/anything-4.0-inpainting")
 
     try:
         with tempfile.TemporaryDirectory(prefix="paperdoll_inpaint_") as tmp:
@@ -345,11 +355,6 @@ async def inpaint_generate_endpoint(
             mask_path = tmp_path / "garment_mask.png"
             image_path.write_bytes(await image.read())
             mask_path.write_bytes(await mask.read())
-
-            generated_dir = Path("public") / "assets" / "inpaint_generated"
-            generated_dir.mkdir(parents=True, exist_ok=True)
-            generated_name = f"inpaint_{seed}_{uuid.uuid4().hex[:8]}.png"
-            generated_path = generated_dir / generated_name
 
             req = InpaintRequest(
                 prompt=prompt,
@@ -361,30 +366,56 @@ async def inpaint_generate_endpoint(
                 width=width,
                 height=height,
                 fast=fast,
-                model_repo=model_repo.strip() or os.environ.get("PAPERDOLL_INPAINT_MODEL_REPO", "Sanster/anything-4.0-inpainting"),
+                feather=feather,
+                controlnet=controlnet,
+                controlnet_model=controlnet_model,
+                controlnet_scale=controlnet_scale,
+                model_repo=resolved_repo,
                 device=device,
                 image=image_path,
                 mask=mask_path,
             )
-            result = run_inpaint_generation(req, generated_path)
-            return JSONResponse({
-                "success": True,
-                "image_b64": result["image_b64"],
-                "image_path": result["image_path"],
-                "metadata": {
-                    "prompt": prompt,
-                    "seed": seed,
-                    "steps": req.steps,
-                    "fast": fast,
-                    "model_repo": req.model_repo,
-                },
-            })
+
+            # Start the worker if needed (blocks until healthy, up to 120 s).
+            await ensure_worker(model_repo=resolved_repo, device=device)
+            job_id = await submit_to_worker(req)
+            return JSONResponse({"job_id": job_id})
+
     except HTTPException:
         raise
     except RuntimeError as e:
         raise HTTPException(503, str(e))
     except Exception as e:
-        raise HTTPException(500, f"Inpaint generation failed: {e}")
+        raise HTTPException(500, f"Inpaint submission failed: {e}")
+
+
+@app.get("/api/inpaint/progress/{job_id}")
+async def inpaint_progress_endpoint(job_id: str):
+    """Proxy SSE progress stream from the warm worker to the browser."""
+    import httpx
+
+    async def forward():
+        try:
+            async with httpx.AsyncClient(timeout=None) as c:
+                async with c.stream("GET", f"{_worker_base_url()}/progress/{job_id}") as r:
+                    async for chunk in r.aiter_bytes():
+                        yield chunk
+        except Exception as exc:
+            import json
+            yield f'data: {json.dumps({"type": "error", "message": str(exc)})}\n\n'
+
+    return StreamingResponse(
+        forward(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/inpaint/cancel/{job_id}")
+async def inpaint_cancel_endpoint(job_id: str):
+    """Signal the worker to cancel a running job."""
+    await cancel_worker_job(job_id)
+    return JSONResponse({"ok": True})
 
 
 @app.post("/api/cleanup-assist/lane-c")

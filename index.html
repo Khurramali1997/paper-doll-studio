@@ -320,6 +320,18 @@
                       </label>
                     </div>
                     <label class="switch-item"><span class="switch-label" title="DPM++ 2M Karras scheduler — converges in 10-12 steps vs 20+ for PNDM">Fast mode (DPM++)</span><input type="checkbox" id="chk-inpaint-fast" checked><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label" title="Canny edge ControlNet — helps the generated garment follow the body structure">Pose guidance (ControlNet)</span><input type="checkbox" id="chk-inpaint-controlnet"><span class="slider"></span></label>
+                    <div id="inpaint-controlnet-options" style="display: none; flex-direction: column; gap: 0.35rem; padding: 0.4rem; border-radius: 6px; background: rgba(120,80,255,0.06); border: 1px solid rgba(120,80,255,0.2);">
+                      <div class="align-control">
+                        <label for="txt-inpaint-controlnet-model" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">ControlNet model</label>
+                        <input type="text" id="txt-inpaint-controlnet-model" value="lllyasviel/control_v11p_sd15_canny" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem; outline: none;">
+                      </div>
+                      <label style="font-size: 0.68rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;">
+                        Conditioning scale
+                        <input type="range" id="range-inpaint-controlnet-scale" min="0.1" max="1.0" step="0.05" value="0.5" style="flex: 1;">
+                        <span id="lbl-inpaint-controlnet-scale" style="min-width: 28px; text-align: right;">0.5</span>
+                      </label>
+                    </div>
                     <div class="align-control">
                       <label for="txt-inpaint-model-repo" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Model repo</label>
                       <input type="text" id="txt-inpaint-model-repo" value="Sanster/anything-4.0-inpainting" style="width: 100%; padding: 0.35rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem; outline: none;">
@@ -339,10 +351,21 @@
                     <input type="range" id="range-inpaint-brush-size" min="4" max="120" value="32" style="flex: 1;">
                     <span id="lbl-inpaint-brush-size" style="min-width: 24px; text-align: right;">32</span>
                   </label>
+                  <label style="font-size: 0.68rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;" title="Gaussian blur on mask edges — blends the inpainted region into the surrounding image">
+                    Feather
+                    <input type="range" id="range-inpaint-feather" min="0" max="32" value="8" style="flex: 1;">
+                    <span id="lbl-inpaint-feather" style="min-width: 24px; text-align: right;">8</span>
+                  </label>
                   <div style="font-size: 0.65rem; color: var(--text-secondary);">Painted area = inpaint region. Leave empty to use stencil selection below.</div>
                 </div>
 
-                <button type="button" class="action-btn accent" id="btn-inpaint-generate" style="width: 100%; padding: 0.5rem 0; font-size: 0.8rem; border-radius: 6px;">Generate Garment</button>
+                <div style="display: flex; gap: 0.5rem;">
+                  <button type="button" class="action-btn accent" id="btn-inpaint-generate" style="flex: 1; padding: 0.5rem 0; font-size: 0.8rem; border-radius: 6px;">Generate Garment</button>
+                  <button type="button" class="action-btn" id="btn-inpaint-cancel" style="display: none; padding: 0.5rem 0.8rem; font-size: 0.8rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-secondary); cursor: pointer;">Cancel</button>
+                </div>
+                <div id="inpaint-progress-wrap" style="display: none; height: 4px; border-radius: 2px; background: var(--bg-secondary); overflow: hidden; margin-top: 0.2rem;">
+                  <div id="inpaint-progress-bar" style="height: 100%; width: 0%; background: var(--accent-color); border-radius: 2px; transition: width 0.3s ease;"></div>
+                </div>
                 <div id="inpaint-status" class="status-box stencil-status" style="display: none;"></div>
 
                 <div id="inpaint-result" style="display: none; margin-top: 0.4rem;">
