@@ -34,7 +34,7 @@ class InpaintRequest:
     fast: bool = True
     feather: int = 8
     controlnet: bool = False
-    controlnet_model: str = "lllyasviel/control_v11p_sd15_openpose"
+    controlnet_model: str = "lllyasviel/control_v11p_sd15_canny"
     controlnet_scale: float = 0.5
     model_repo: str = "Sanster/anything-4.0-inpainting"
     device: str = "auto"

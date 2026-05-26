@@ -29,7 +29,6 @@ dependencies = [
 inpaint = [
     "torch>=2.1.0",
     "diffusers>=0.26.0",
-    "controlnet-aux>=0.0.7",
 ]
 test = [
     "pytest>=8.0.0",

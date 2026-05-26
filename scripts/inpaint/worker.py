@@ -91,34 +91,14 @@ def _load_controlnet_pipe(model_repo: str, device: str, controlnet_model: str):
     return pipe
 
 
-_dwpose_detector = None
-_dwpose_lock = threading.Lock()
-
-
-def _get_dwpose_detector():
-    global _dwpose_detector
-    with _dwpose_lock:
-        if _dwpose_detector is None:
-            from controlnet_aux import DWposeDetector
-            _dwpose_detector = DWposeDetector.from_pretrained("lllyasviel/Annotators")
-        return _dwpose_detector
-
-
 def _control_image(img: Image.Image) -> Image.Image:
-    """Return a DWPose skeleton image for ControlNet conditioning.
-
-    Falls back to Canny edges if controlnet_aux is not installed.
-    """
-    try:
-        detector = _get_dwpose_detector()
-        return detector(img, detect_resolution=512, image_resolution=img.width, output_type="pil")
-    except (ImportError, Exception):
-        import cv2
-        import numpy as np
-        arr = np.array(img.convert("RGB"))
-        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-        edges = cv2.Canny(gray, 100, 200)
-        return Image.fromarray(edges).convert("RGB")
+    """Return a Canny edge map for control_v11p_sd15_canny conditioning."""
+    import cv2
+    import numpy as np
+    arr = np.array(img.convert("RGB"))
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 100, 200)
+    return Image.fromarray(edges).convert("RGB")
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -143,7 +123,7 @@ async def generate(
     fast: bool = Form(True),
     feather: int = Form(8),
     controlnet: bool = Form(False),
-    controlnet_model: str = Form("lllyasviel/control_v11p_sd15_openpose"),
+    controlnet_model: str = Form("lllyasviel/control_v11p_sd15_canny"),
     controlnet_scale: float = Form(0.5),
     model_repo: str = Form(DEFAULT_MODEL_REPO),
     device: str = Form("auto"),
