@@ -62,6 +62,7 @@ def _build_pipe(model_repo: str, device: str) -> StableDiffusionInpaintPipeline:
     pipe = pipe.to(device)
     if device == "mps":
         pipe.enable_attention_slicing()
+        pipe.enable_vae_slicing()
     return pipe
 
 
@@ -88,6 +89,7 @@ def _load_controlnet_pipe(model_repo: str, device: str, controlnet_model: str):
     pipe = pipe.to(device)
     if device == "mps":
         pipe.enable_attention_slicing()
+        pipe.enable_vae_slicing()
     return pipe
 
 
