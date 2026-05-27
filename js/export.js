@@ -1,4 +1,4 @@
-import { DOLL_CONFIG, state, exportStateJSON } from './state.js';
+import { DOLL_CONFIG, state, exportStateJSON, getBaseLayers } from './state.js';
 import { localImageCache, localBlobCache, generateDynamicBodyReferenceCanvas } from './render.js';
 import { downloadBlob, loadImage } from './utils.js';
 
@@ -63,26 +63,24 @@ export async function generateBodyCompositeCanvas() {
   const docW = DOLL_CONFIG.canvas.width;
   const docH = DOLL_CONFIG.canvas.height;
 
-  // Delegate to the canonical naked-body composer (render.js) so the inpaint
-  // base is identical to what the active-view doll preview is showing —
-  // same layer selection (getBaseLayers: non-wardrobe + skin_wear options),
-  // same visibility toggles, same per-category/subcategory offsets. Prior
-  // implementations here used ML_BODY_EXCLUDED_CATEGORIES (an empty set)
-  // which silently composited wardrobe layers, violating the naked-body
-  // invariant and diverging from the user's active view.
-  const canvas = await generateDynamicBodyReferenceCanvas();
-
-  // Treat an empty canvas (no compositable body layers) as the trigger for
-  // the static body_ref fallback — e.g. a body_ref PNG was supplied directly
-  // without a PSD layer set.
-  const ctx = canvas.getContext('2d');
-  const sample = ctx.getImageData(0, 0, Math.min(8, docW), Math.min(8, docH)).data;
-  let hasContent = false;
-  for (let i = 3; i < sample.length; i += 4) {
-    if (sample[i] !== 0) { hasContent = true; break; }
+  // Preferred path: delegate to the canonical naked-body composer (render.js)
+  // so the inpaint base is identical to what the active-view doll preview is
+  // showing — same layer selection (getBaseLayers: non-wardrobe + skin_wear
+  // options), same visibility toggles, same per-category/subcategory offsets.
+  // Whenever there are base layers to render, trust this path; checking the
+  // rendered canvas for "content" via pixel sampling is fragile (e.g. PNG
+  // imports center the character on the canvas — top-left is always
+  // transparent regardless of whether the body rendered correctly).
+  if (getBaseLayers().length > 0) {
+    return generateDynamicBodyReferenceCanvas();
   }
-  if (hasContent) return canvas;
 
+  // Fallback: no compositable body layers (e.g. user dropped a body_ref PNG
+  // directly without a PSD layer set). Use the frozen reference if present.
+  const canvas = document.createElement('canvas');
+  canvas.width = docW;
+  canvas.height = docH;
+  const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, docW, docH);
   if (DOLL_CONFIG.body_ref) {

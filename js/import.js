@@ -2288,24 +2288,34 @@ async function loadAndParseCharacterPNG(file, targetContainer) {
       if (layer.toggleable) { meta.toggleable = true; meta.defaultVisible = true; }
       if (layer.dyeable) meta.dyeable = true;
       if (layer.category === 'wardrobe') {
-        meta.optionValue = 'imported';
+        // SAM's 19-class taxonomy has no torso / arms / legs / hands / feet
+        // classes — those body regions get labeled as topwear / handwear /
+        // legwear / bottomwear / footwear (the model was trained on Live2D
+        // characters where those regions are always covered). For a naked
+        // character PNG the SAM "topwear" cutout IS the visible torso skin.
+        // Tag it as skin_wear so getBaseLayers includes it in the naked-body
+        // composite — same convention paperdoll's PSD path uses for the
+        // skin layer that sits under any actual garment.
+        meta.optionValue = 'skin_wear';
         (wardrobeBySlot[layer.subcategory] = wardrobeBySlot[layer.subcategory] || []).push(meta);
       }
       layersConfig.push(meta);
     }
 
-    // Each detected wardrobe class becomes a one-option slot ("imported"),
-    // plus a "none" option so the user can hide it from the active view.
+    // Each detected wardrobe class becomes a one-option slot whose default
+    // is the SAM cutout treated as skin/naked body. When the user later
+    // generates actual wardrobe via the inpaint pipeline, those become
+    // additional options in the same slot and layer on top.
     const wardrobeConfig = {};
     for (const [slot, slotLayers] of Object.entries(wardrobeBySlot)) {
       const displayName = slot.replace(/\b\w/g, c => c.toUpperCase());
       wardrobeConfig[slot] = {
         name: displayName,
         options: [
-          { value: 'imported', name: 'Imported', layers: slotLayers.map(l => l.id) },
+          { value: 'skin_wear', name: 'Naked / Skin Wear', layers: slotLayers.map(l => l.id) },
           { value: 'none', name: 'Invisible / None', layers: [] },
         ],
-        defaultValue: 'imported',
+        defaultValue: 'skin_wear',
       };
     }
 
