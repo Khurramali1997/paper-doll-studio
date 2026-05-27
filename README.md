@@ -1,220 +1,103 @@
 # Paper Doll Studio
 
-Local-first character customization pipeline for indie visual novel, RPG, and narrative game creators. Import a layered PSD character rig, build a wardrobe of fitted garments, clean and validate each asset with an assisted workbench, generate AI-conditioned guide packs, and export game-ready wardrobe ZIPs — all running on your machine, no cloud required.
+Local-first character customization pipeline for visual novel and indie game devs. Drop a layered PSD **or** a single character PNG, get a paper doll with a wardrobe slot system, AI-generate new garments via SD 1.5 inpainting, and export game-ready wardrobe assets. Everything runs on your machine — no cloud, no signup. Built and tested on a 16 GB M4 Mac; the entire stack is tuned for memory-constrained Apple Silicon.
 
-## Quick Start
+## Quick start
 
 ```bash
-# 1. Install Python dependencies (Python 3.11+)
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+# 1. Python deps (Python 3.11+)
+python3 -m venv venv
+source venv/bin/activate           # Windows: venv\Scripts\activate
+pip install -e ".[inpaint,sam,tagger,upscale]"
 
-# 2. Install JS dev tools (optional — only needed for tests/lint)
+# 2. Optional: pre-warm the heavy model downloads so the first inpaint
+#    isn't a silent 60-sec wait
+huggingface-cli download Sanster/anything-4.0-inpainting
+huggingface-cli download h94/IP-Adapter \
+  models/ip-adapter_sd15.safetensors \
+  --include "models/image_encoder/*"
+huggingface-cli download 24yearsold/l2d_sam_iter2
+
+# 3. JS dev tools (optional — only for tests)
 npm install
 
-# 3. Start the server
-npm run dev
-# → http://localhost:8000
+# 4. Run
+npm run dev                        # → http://localhost:8000
 ```
 
-`npm run dev:reload` adds uvicorn `--reload` for live Python changes.
+`npm run dev:reload` adds uvicorn `--reload` for live Python changes. Note that the inpaint worker is a long-lived subprocess — `pkill -f "scripts/inpaint/worker.py"` after editing `worker.py` so it picks up changes.
 
-## What It Does
+## Two ways to start a project
 
-```
-PSD ──→ Base Rig ──→ Frontend ──→ Compiler ──→ Export ZIP
-           │              │            │
-       rig.json      DOLL_CONFIG   compiled/       ┌─ AI Reference Pack
-       masks/        wardrobe      metadata.json   │  (silhouette + depth +
-       base_rig/     state.json    manifest.json   │   pose + canny + outline)
-                                                   └─ Garment Generators
-                                                      (LayerDiffuse · Inpaint · CoreML)
-```
+### 1. PSD import (artist workflow)
+Drop a layered PSD into **Studio Tools → Import Master PSD**. Layers are extracted client-side via `ag-psd`, categorized by name heuristics into hair / face / eyes / wardrobe slots, and assembled into `DOLL_CONFIG.layers` with z-order, visibility toggles, and dye support. Best for production work where the artist controls layer separation.
 
-**Core pipeline** — Import a PSD → auto-detect body anchors → manually place and align garment PNGs over the body ghost → clean alpha edges in the Cleanup Workbench → bake to compiled assets → export as a self-contained ZIP.
+### 2. Character PNG import (SAM auto-layer)
+Drop a flat anime character PNG into **Studio Tools → Import Character PNG**. The 19-class anime SAM model (from the See-through project — see credits) decomposes the image into per-class RGBA layers (hair, face, eyes, topwear, bottomwear, etc.) and builds the same `DOLL_CONFIG` structure server-side. No PSD required.
 
-**Authoring tools** — Download guide templates (seven garment silhouette PNGs in human + AI variants), body silhouette, and a five-channel AI conditioning reference pack.
+- **Naked-character input** → complete doll, all body layers visible, wardrobe slots empty (ready for AI generation)
+- **Dressed-character input** → wardrobe layers come out clean as ingestible assets, but the naked-body composite has holes where the wardrobe covered the body. Inpaint regeneration of those slots fills naturally because the new mask covers the same regions.
 
-**Garment generators (optional)** — Three local generators produce RGBA garment PNGs and route them straight into the Cleanup Workbench:
-- **Digital Tailor** — deterministic mask-to-garment constructor (8 recipes, no diffusion)
-- **LayerDiffuse** — Stable Diffusion with a transparent VAE decoder; best for tattoos and overlays
-- **Inpaint** — `Sanster/anything-4.0-inpainting` with a brush-painted mask; best for fitted garments
+Both paths converge on the same `DOLL_CONFIG.layers + DOLL_CONFIG.wardrobe` shape, so every downstream tool (renderer, inpaint, cleanup workbench, export ZIP) works identically.
 
-## Requirements
+## The AI inpaint pipeline
 
-| Requirement | Version |
-|-------------|---------|
+Mask-conditioned inpainting via `Sanster/anything-4.0-inpainting` (SD 1.5 anime variant). Persistent FastAPI worker keeps the model warm across requests, SSE streaming for progress, cancellable mid-run.
+
+### Architectural decisions worth knowing
+
+These are the calls that ended up mattering for quality on 16 GB Apple Silicon:
+
+**Diffusion is pinned to 512×512** regardless of canvas size. SD 1.5 was trained at 512; above 768 it starts duplicating limbs. Pinning to native res frees ~2-3 GB working memory (opens room for IP-Adapter), gives best quality per pass, and runs ~2× faster. After inference, the result is upscaled to canvas dim with **Lanczos** (default, zero-dep) or **RealESRGAN-anime** (optional `[upscale]` extra, ~17 MB, sharper cel-shaded lines).
+
+**Per-garment generation, not whole-outfit.** A single inpaint pass with "blazer + skirt + boots" splits SD 1.5's fixed expressive capacity across all three garments. Per-garment passes give each region the full attention budget — the same math that makes ADetailer work for faces, applied to clothing. The per-garment refinement function uses the naked-body composite as base (never iterates on dressed pixels) and the SAM cutout for that slot as the mask, with slot-aware prompt scaffolds biasing generation toward the requested garment.
+
+**IP-Adapter for cross-pass style cohesion.** Separately-generated garments don't naturally harmonize. IP-Adapter (`h94/IP-Adapter` basic + CLIP-ViT-H image encoder at fp16) lets you feed any style reference (character render, target outfit photo) and every pass anchors to it. ~1.3 GB add, fits the budget. **Mutually exclusive with ControlNet** in the UI — both loaded is ~8 GB and MPS fragmentation hits OOM.
+
+**The naked-body invariant.** The base image for every inpaint pass is always the naked body composite — never the result of a previous inpaint. This means each generated garment is independently interpretable as "what would this garment look like on a fresh body," which is the right model for layered wardrobe assets. The composite is built live from current active-view body layers (matches what the user sees, respects toggles/offsets).
+
+### Per-garment workflow
+
+Inside the **Stencils** tab's Inpaint Garment Generator:
+
+1. **Generate** — paint a brush mask or pick a SAM region from the dropdown, write a prompt, click Generate Garment. Result appears in the preview.
+2. **Extract Garments (SAM)** — runs SAM on the result and decomposes into per-class RGBA cutouts. Each appears as a card in the Garment Extraction Workbench.
+3. **Per-card actions**:
+   - **Refine** — re-inpaint that one slot with a focused prompt against the naked body. Returns a cropped RGBA garment that alpha-composites into the preview without a SAM re-extract round-trip.
+   - **To Cleanup** — send the cutout to the Cleanup Workbench for alpha cleanup and wardrobe ingest.
+4. **Merge selected** — for one-piece garments (dresses, jumpsuits) that SAM splits across topwear + bottomwear, multi-select cards and merge into one unified cutout via union of alphas. Client-side, no extra SAM pass.
+
+### What didn't work (and why it's not here)
+
+- **LayerDiffusion transparency decoder** — would have created a second alpha-generation path that competes with SAM. The 19-class taxonomy is the spine; redundant consistency mechanisms reduce coherence rather than add it.
+- **Whole-outfit-then-SAM-split** — initial workflow that got refactored into per-garment-from-the-start. Cleaner architecture, naturally produces ingestible wardrobe assets.
+- **Frozen `body_ref` snapshot** — original design baked the naked-body reference at import time. Live editing in the UI did nothing. Now live-composites from current layer state via `generateBodyCompositeCanvas` (delegates to `generateDynamicBodyReferenceCanvas`).
+
+## Hardware
+
+| Requirement | Recommended |
+|-------------|-------------|
 | Python | ≥ 3.11 |
-| Node.js | ≥ 18 (dev tools only) |
-| RAM | 8 GB minimum; 16 GB recommended for diffusion generators |
-| GPU / NPU | Optional — MPS (Apple Silicon) or CUDA auto-detected by generators |
+| Node.js | ≥ 18 (dev tools / tests only) |
+| RAM | 16 GB unified memory (Apple Silicon) or 12 GB+ VRAM (CUDA) |
+| GPU / accelerator | MPS (Apple Silicon), CUDA, or CPU — auto-detected |
 
-## Optional: Diffusion Generators
+This project is built and tested on **M4 / 16 GB unified memory / MPS in fp32** (diffusers on MPS doesn't have a working fp16 path for SD). SDXL and FLUX are out of reach locally on this hardware; the entire pipeline is deliberately SD 1.5-tier. CUDA users with more VRAM can swap in heavier base models via the `model_repo` field in the inpaint UI.
 
-The inpaint and LayerDiffuse generators run in isolated venvs to avoid dependency conflicts with the main server.
+## Optional dependencies
 
-### Inpaint (`Sanster/anything-4.0-inpainting`)
+| Extra | Installs | Powers |
+|-------|----------|--------|
+| `[inpaint]` | torch, diffusers | The SD 1.5 inpaint worker |
+| `[sam]` | torch, accelerate, huggingface-hub | 19-class anime body segmentation, garment extraction, character PNG import |
+| `[tagger]` | torch, timm, pandas | WD-tagger v3 garment slot classification |
+| `[upscale]` | torch, realesrgan | RealESRGAN-anime sharp upscale |
 
-```bash
-python -m venv venv                         # reuse main venv — no extra install needed
-pip install torch diffusers transformers accelerate peft
-# Model downloads automatically from HuggingFace on first generate (~2 GB)
-```
+Install combined: `pip install -e ".[inpaint,sam,tagger,upscale]"`.
 
-Environment overrides (all optional):
+Each extra is independent — missing deps degrade to graceful 503 errors at the API layer with a clear "extras not installed" message, not crashes.
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `PAPERDOLL_INPAINT_PYTHON` | `sys.executable` | Python used to run the inpaint script |
-| `PAPERDOLL_INPAINT_RUNNER` | `scripts/inpaint/run_inpaint.py` | Script path |
-| `PAPERDOLL_INPAINT_MODEL_REPO` | `Sanster/anything-4.0-inpainting` | HuggingFace model repo |
-| `PAPERDOLL_INPAINT_TIMEOUT_SEC` | `1200` | Per-generation timeout |
-
-### LayerDiffuse (`digiplay/Juggernaut_final` + transparent VAE)
-
-```bash
-python3.11 -m venv .venv-layerdiffuse
-source .venv-layerdiffuse/bin/activate
-pip install torch diffusers transformers accelerate peft
-# Clone the layerdiffuse vendor library into vendor/diffuser_layerdiffuse/
-```
-
-Environment overrides:
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `PAPERDOLL_LAYERDIFFUSE_PYTHON` | `.venv-layerdiffuse/bin/python` | Python for LayerDiffuse |
-| `PAPERDOLL_LAYERDIFFUSE_RUNNER` | `scripts/layerdiffuse/run_layerdiffuse.py` | Script path |
-| `PAPERDOLL_LAYERDIFFUSE_VENDOR` | `vendor/diffuser_layerdiffuse` | LayerDiffuse library path |
-| `PAPERDOLL_LAYERDIFFUSE_MODEL` | `digiplay/Juggernaut_final` | Base SD model |
-
-### CoreML (Apple Silicon only)
-
-```bash
-python3.11 -m venv .venv-coreml
-source .venv-coreml/bin/activate
-pip install torch coremltools ...
-# Place CoreML model packages in models/coreml/
-```
-
-## ML Models
-
-All models auto-download to `models/` on first API call. No manual steps.
-
-| Model | Size | Used by | Download |
-|-------|------|---------|----------|
-| `depth_anything_v2_vits.onnx` | ~50 MB | Reference Pack — depth channel | HuggingFace `onnx-community/depth-anything-v2-small` |
-| `pose_landmarker_full.task` | ~10 MB | Reference Pack — pose channel | Google MediaPipe CDN |
-| `dw-ll_ucoco_384.onnx` | ~134 MB | Digital Tailor — whole-body pose | HuggingFace `NirZabari/DWPose` |
-| `isnet-anime_1024.onnx` | ~170 MB | Stencil Pipeline — foreground seg | HuggingFace `skytnt/anime-seg` |
-| `lbpcascade_animeface.xml` | ~2.6 MB | Stencil Pipeline — face detection | GitHub `nagadomi/lbpcascade_animeface` |
-| `hand_landmarker.task` | ~8 MB | Stencil Pipeline — hand detection | Google MediaPipe CDN |
-
-Diffusion models (`anything-4.0-inpainting`, `Juggernaut_final`) download via HuggingFace Hub the first time a generator runs and are cached in `~/.cache/huggingface/`.
-
-## Architecture
-
-```
-PSD Importer ──→ Base Rig ──→ Frontend ──→ Compiler ──→ Export
-                    │            │            │
-                rig.json     DOLL_CONFIG   compiled assets
-                masks/       wardrobe/     metadata.json
-                base_rig/    state.json    wardrobe_manifest.json
-                                                │
-                                                └─→ AI conditioning pack
-                                                    (silhouette + outline +
-                                                     canny + depth + pose)
-```
-
-**PSD ingestion** — `importers/flat_psd_importer.py` reads flat (non-grouped) PSDs, normalizes layer names via `flat_layer_map.json`, and produces canonical composites and split (left/right arm) layers. The live UI uses an in-browser parser (`ag-psd`); the Python importer covers batch/scripted builds.
-
-**Garment ingestion** — Drop PNG → align visually (drag, wheel, scale X/Y, pixel inputs, arrow-key nudge) → optional chroma key and body subtraction → Cleanup Workbench → bake natural-dims-centered to a compiled asset.
-
-## Key Features
-
-- **Unified category registry** — `compiler/category_registry.py` is the single source of truth for all 10 wardrobe slots. All components import from here; no hardcoded lists anywhere.
-- **Natural-dims-centered bake** — `applyBakeTransform` is shared by the live preview overlay and the compile step; they cannot drift.
-- **Pixel-honest alignment** — Width/Height inputs read and write the rendered pixel size directly. Independent Scale X / Scale Y for non-uniform fit; uniform Scale slider plus mouse-wheel for ratio-preserving changes; arrow keys nudge 1 px (Shift = 10 px).
-- **Auto-shrink on load** — sources larger than the canvas auto-fit; small sources keep native pixel size.
-- **Canonical z-order** — new layers receive their category's z value at ingest time.
-- **Cleanup Workbench** — canvas-based eraser/restore brush, undo stack, white-background removal, halo cleanup, island removal, body stencil clipping (soft/strict/preview-only), and a CV-assisted Lane C proposal for clothed-guide outputs. Custom stencils from the Stencil Editor populate the workbench mask dropdown automatically.
-- **Inpaint brush mask** — paint the inpaint region directly on the character viewport with a brush/erase/clear tool; exports as a white-on-black mask into the inpaint API.
-- **AI conditioning reference pack** — one-click ZIP of five ControlNet-ready channels: silhouette, outline, canny, depth (Depth Anything V2), pose (MediaPipe → 18-keypoint OpenPose).
-- **Digital Tailor** — deterministic mask-to-garment constructor. Body silhouette is the authoritative contour. 8 recipes (bodice, tight_top, bodycon_dress, tight_dress, simple_flared_dress, leggings, stockings, gloves), 7 user-controllable transforms, solid/texture/edge/shadow material system.
-- **Export ZIP** — bundles `project.json`, `doll_config.js`, every layer PNG, every compiled asset folder, and the full app.
-
-## Project Structure
-
-```
-├── compiler/                    # Python compiler pipeline (35+ modules)
-│   ├── category_registry.py     # Canonical 10-slot wardrobe registry
-│   ├── canonical_schema.py      # Rig contract (anchors, layers, z-order)
-│   ├── compiler.py              # AssetCompiler orchestrator
-│   ├── reference_pack.py        # Five-channel conditioning ZIP
-│   ├── pose_estimator.py        # MediaPipe BlazePose → OpenPose (18 joints)
-│   ├── depth_estimator.py       # Depth Anything V2 ONNX wrapper
-│   ├── dwpose_estimator.py      # DWPose COCO-WholeBody (133 keypoints)
-│   ├── anime_segmenter.py       # ISNet-anime foreground segmentation
-│   ├── anime_detector.py        # Anime face + hand detection
-│   ├── pattern_constructor.py   # Digital Tailor (8 recipes, 7 transforms)
-│   ├── cleanup_assist.py        # Lane C CV mask proposal
-│   ├── stencil_pipeline.py      # Stencil geometry channel pipeline
-│   ├── layerdiffuse_bridge.py   # LayerDiffuse subprocess bridge
-│   ├── inpaint_bridge.py        # Inpainting subprocess bridge
-│   ├── coreml_bridge.py         # CoreML generation bridge
-│   ├── rig_autodetect.py        # Silhouette → draft rig.json (17 anchors)
-│   ├── guide_templates.py       # Per-garment authoring PNGs (human + AI)
-│   └── [20+ more modules]
-├── importers/                   # PSD ingestion
-│   ├── flat_psd_importer.py
-│   ├── flat_layer_map.json
-│   └── layer_mapper.py
-├── js/                          # Frontend (ES modules)
-│   ├── state.js                 # DOLL_CONFIG runtime state
-│   ├── render.js                # Canvas rendering
-│   ├── import.js                # PSD + garment ingestion, alignment UI, cleanup workbench
-│   ├── wardrobe.js              # Wardrobe panel
-│   ├── export.js                # ZIP export + reference pack
-│   ├── stencils.js              # Stencil editor, Digital Tailor, generator UIs
-│   ├── calibration.js           # Per-layer color/offset adjustments
-│   ├── cleanup.js               # Background cleanup image processing
-│   └── utils.js                 # Bake helpers, chroma key, name cleaning
-├── scripts/
-│   ├── inpaint/                 # Inpainting subprocess runner
-│   └── layerdiffuse/            # LayerDiffuse subprocess runner
-├── base_rig/
-│   ├── rig.json                 # Anchors (17), canvas dimensions, garment regions
-│   └── masks/                   # Body silhouette + per-category allowed regions
-├── models/                      # Auto-downloaded ML models (gitignored)
-├── public/assets/               # Layer PNGs (checked in); compiled/ gitignored
-├── python/tests/                # Python test suite (14 files, 105 tests)
-├── tests/                       # JS test suite (4 files, 51 tests)
-├── server.py                    # FastAPI backend
-├── index.html                   # App entry point
-├── style.css
-├── requirements.txt
-└── pyproject.toml
-```
-
-## Categories
-
-| Slot | z-index | Upper body |
-|------|---------|------------|
-| dress | 205 | yes |
-| topwear | 210 | yes |
-| outerwear | 215 | yes |
-| bottomwear | 220 | no |
-| skirt | 225 | no |
-| pants | 225 | no |
-| legwear | 230 | no |
-| shoes | 235 | no |
-| handwear | 240 | no |
-| accessory | 245 | no |
-
-Skin layers occupy z = 170–199.
-
-## API Endpoints
+## API endpoints
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -222,115 +105,99 @@ Skin layers occupy z = 170–199.
 | `POST` | `/api/reference-pack` | Generate five-channel AI conditioning ZIP |
 | `POST` | `/api/reference-channels` | Individual conditioning channels |
 | `POST` | `/api/rig-autodetect` | Silhouette → draft rig.json |
-| `GET` | `/api/guide-templates.zip` | Download per-garment authoring guides |
+| `GET` | `/api/guide-templates.zip` | Per-garment authoring guide templates |
 | `POST` | `/api/construct-pattern` | Digital Tailor garment generation |
 | `POST` | `/api/stencil-pipeline` | Stencil geometry channel pipeline |
 | `POST` | `/api/cleanup-assist/lane-c` | CV-assisted mask proposal for clothed guides |
 | `POST` | `/api/ai-process` | Background removal (rembg) |
-| `GET` | `/api/inpaint/status` | Check inpaint runner availability |
-| `POST` | `/api/inpaint/generate` | Generate garment via inpainting |
-| `GET` | `/api/layerdiffuse/status` | Check LayerDiffuse availability |
-| `POST` | `/api/layerdiffuse/generate` | Generate transparent-layer RGBA via LayerDiffuse |
-| `GET` | `/api/coreml/status` | Check CoreML availability |
-| `POST` | `/api/coreml/generate` | Generate via CoreML (Apple Silicon) |
+| `POST` | `/api/classify-garment` | Predict wardrobe slot for a garment image (WD tagger) |
+| `POST` | `/api/setup/body-ref` | Upload a body reference PNG |
+| `POST` | `/api/setup/parse-body-regions` | Run SAM on body_ref → 19 binary class masks |
+| `POST` | `/api/extract-garments` | Run SAM on a clothed image → per-garment RGBA cutouts |
+| `POST` | `/api/import-character-png` | PNG → 19-class decompose → full DOLL_CONFIG manifest |
+| `GET` | `/api/inpaint/status` | Worker health and current model |
+| `POST` | `/api/inpaint/generate` | Submit inpaint job (returns SSE job_id) |
+| `GET` | `/api/inpaint/progress/{job_id}` | Server-sent events stream for a job |
+| `POST` | `/api/inpaint/cancel/{job_id}` | Cancel a running job mid-flight |
+
+## Project structure
+
+```
+├── compiler/                    # Python pipeline + bridges
+│   ├── body_parser.py           # SAM-based 19-class body segmentation
+│   ├── visual_classifier.py     # WD-tagger v3 wardrobe slot classifier
+│   ├── inpaint_bridge.py        # Inpaint worker process management
+│   ├── ai_segmenter.py          # rembg foreground / clothing isolation
+│   ├── anime_segmenter.py       # ISNet-anime foreground segmentation
+│   ├── pattern_constructor.py   # Digital Tailor (8 recipes, 7 transforms)
+│   ├── reference_pack.py        # Five-channel AI conditioning ZIP
+│   ├── pose_estimator.py        # MediaPipe BlazePose → OpenPose 18-keypoint
+│   ├── depth_estimator.py       # Depth Anything V2 ONNX wrapper
+│   ├── dwpose_estimator.py      # DWPose COCO-WholeBody (133 keypoints)
+│   ├── stencil_pipeline.py      # Stencil geometry channel pipeline
+│   ├── cleanup_assist.py        # Lane C CV mask proposal
+│   ├── rig_autodetect.py        # Silhouette → draft rig.json (17 anchors)
+│   ├── category_registry.py     # Canonical wardrobe slot taxonomy
+│   ├── see_through/             # Vendored SemanticSam (from See-through paper)
+│   └── ... (compiler.py, schemas, guide_templates, etc.)
+├── scripts/inpaint/
+│   ├── worker.py                # Persistent FastAPI inpaint worker (warm pipe, SSE)
+│   └── run_inpaint.py           # One-shot fallback runner
+├── js/                          # ES-module frontend
+│   ├── state.js                 # DOLL_CONFIG + runtime state
+│   ├── render.js                # Canvas rendering + naked-body composite
+│   ├── import.js                # PSD + PNG import, garment ingestion, cleanup workbench
+│   ├── wardrobe.js              # Wardrobe panel UI
+│   ├── export.js                # ZIP export + reference pack triggers
+│   ├── stencils.js              # Stencil editor, inpaint UI, Garment Extraction Workbench
+│   ├── calibration.js           # Per-layer adjustments
+│   ├── cleanup.js               # Background cleanup image processing
+│   └── utils.js
+├── base_rig/
+│   ├── rig.json                 # Anchors (17), canvas dims, garment regions
+│   └── masks/                   # Body silhouette + per-category allowed regions
+├── models/                      # Auto-downloaded ML models (gitignored)
+├── public/assets/               # Layer PNGs, generator outputs (some gitignored)
+├── importers/                   # PSD ingestion utilities
+├── python/tests/                # Python test suite
+├── tests/                       # JS test suite (vitest)
+├── server.py                    # FastAPI backend
+├── index.html                   # App entry
+└── pyproject.toml
+```
 
 ## Testing
 
 ```bash
-# Python
-venv/bin/python -m pytest
-
-# JavaScript
-npx vitest run
-
-# Both
-venv/bin/python -m pytest && npx vitest run
+venv/bin/python -m pytest        # Python tests
+npx vitest run                   # JS tests
 ```
 
-156 total tests (105 Python + 51 JS). Model inference is mocked in unit tests; no network calls during `pytest`.
+Model inference is mocked in unit tests; no network calls during `pytest`.
 
-## Importing Garments
+## Other tools (not directly part of the AI inpaint loop)
 
-1. Open `http://localhost:8000` → **Stencils** tab or **Importer**.
-2. Select a **wardrobe slot** (dress, topwear, etc.).
-3. Drop a garment PNG. Auto-shrink fits oversized sources within the canvas.
-4. Align over the body ghost: drag to position, scroll to scale uniformly, arrow keys to nudge (Shift = 10 px), Scale X / Scale Y for non-uniform fit, Width / Height pixel inputs for exact sizing, or **Auto-Align to Body Mask**.
-5. (Optional) Enable **Color Key Background Removal** or **Subtract Body Reference**.
-6. Click **Process & Add to Wardrobe**. The compiler normalizes, validates, and splits the asset; the new option appears in the wardrobe panel.
+**Digital Tailor** — deterministic mask-to-garment constructor, no diffusion. 8 recipes (bodice, tight_top, bodycon_dress, tight_dress, simple_flared_dress, leggings, stockings, gloves), 7 transforms (expand-x, expand-y, dilate, erode, smooth, flare, taper), solid/texture/edge/shadow material system. Body silhouette is the authoritative contour. Output routes to Cleanup Workbench.
 
-## Cleanup Workbench
+**Cleanup Workbench** — non-destructive post-process for any incoming garment. Lanes (`transparent_png`, `white_background`, `clothed_guide`), toggles (background removal, color key, halo cleanup, island removal, body subtraction, stencil clipping), manual eraser/restore brush with undo, CV-assisted Lane C mask proposal. Final step before wardrobe ingest.
 
-Every garment that enters the workbench (via importer or any generator) goes through a non-destructive cleanup pipeline:
+**AI reference pack** — Export → Download AI Reference Pack (ZIP) produces five ControlNet-ready channels: silhouette, outline, canny, depth (Depth Anything V2), pose (MediaPipe → OpenPose 18-keypoint). Useful for downstream tools that want conditioning images.
 
-- **Lanes** — `transparent_png` (generator outputs), `white_background`, `clothed_guide` (Lane C with CV-assisted mask proposal)
-- **Toggles** — white background removal, color key, halo cleanup, island removal, body subtraction, body stencil clipping
-- **Manual brush** — canvas eraser / restore tool with undo stack
-- **Lane C assist** — generates a CV proposal mask; apply via union, intersect, or replace
-- **Body stencil** — soft blend, strict clip, or preview-only; sources: body silhouette, visible body layers, PSD layer projection, or custom stencil from the Stencil Editor
+**Guide templates** — Per-garment authoring PNGs (human + AI variants) with polygon regions derived from `rig.json` anchors. Useful for artists drafting custom garments.
 
-## Authoring Tools
+**Rig autodetect** — Drop a body silhouette PNG → draft `rig.json` with 17 anchors derived from the silhouette's width profile. Manual review and adjustment before committing.
 
-**Guide templates** — Export → *Download Guide Templates (ZIP)* produces seven per-garment PNGs in human-annotated and AI-clean variants. Polygon regions come from `rig.json` anchors.
+## Credits
 
-**Body silhouette** — Export → *Download Body Silhouette PNG* composites all non-hair layers into a filter-safe binary mask.
+This project would not exist without the work of others:
 
-**AI reference pack** — Export → *Download AI Reference Pack (ZIP)* produces the five ControlNet channels listed in the Key Features section. First call downloads ~60 MB of models; subsequent calls reuse the cache.
-
-**Rig autodetect** — Drop a body silhouette PNG in the Importer tab to generate a draft `rig.json` with 17 anchors from the silhouette's width profile. Output is a starting point; review before replacing `base_rig/rig.json`.
-
-## Digital Tailor
-
-Deterministic mask-to-garment constructor (no diffusion). Body silhouette is the authoritative contour — each garment zone is a vertical body slice bounded by `rig.json` anchor Y positions.
-
-**8 recipes:**
-
-| Recipe | Category | Key shape |
-|--------|----------|-----------|
-| `bodice` | topwear | round-neck cutout |
-| `tight_top` | topwear | round-neck + erode 2 px |
-| `bodycon_dress` | dress | round-neck + erode 6 px |
-| `tight_dress` | dress | round-neck + erode 4 px |
-| `simple_flared_dress` | dress | round-neck + flare 60 px |
-| `leggings` | legwear | waist-to-ankle body slice |
-| `stockings` | legwear | waist-to-ankle + erode 3 px |
-| `gloves` | handwear | body − torso − leg − face |
-
-**7 transforms:** expand-x, expand-y, dilate, erode, smooth, flare (a-line widening), taper (waist pinch).
-
-Output routes to the Cleanup Workbench or directly to the alignment/bake flow.
-
-## Garment Generators
-
-### Inpaint Garment Generator
-
-Mask-conditioned inpainting via `Sanster/anything-4.0-inpainting`. DPM++ 2M Karras scheduler (float32 on Apple Silicon MPS, float16 on CUDA).
-
-**Mask sources (priority order):**
-1. Brush mask painted on the main character viewport (Paint Mask tool)
-2. Stencil selected from the Stencil Editor
-
-White region = inpaint, black region = keep. Output routes to Cleanup Workbench.
-
-### LayerDiffuse
-
-Stable Diffusion with a transparent-layer VAE decoder. Produces RGBA PNGs with genuine alpha channels — no post-hoc background removal. Best for tattoos, overlays, and semi-transparent garments.
-
-Optional **Clip alpha to mask** toggle constrains generated alpha to the body silhouette for cleaner edges. **Alpha threshold** (default 20) removes noise below the cutoff.
-
-### CoreML (Apple Silicon)
-
-Runs `ml-stable-diffusion` CoreML models natively on the ANE/GPU. Fastest on Apple Silicon for smaller garment assets.
-
-## Progress
-
-### ✅ Milestone 1 — Core Pipeline
-Flat PSD import, compiler pipeline, manual-placement bake, canonical z-order, non-destructive validation, alpha-aware chroma key, PSD-aware canvas sizing.
-
-### ✅ Milestone 2 — Authoring Tools
-Anchor-derived guide templates, silhouette-based rig autodetect, AI conditioning reference pack (MediaPipe pose + Depth Anything V2 + Canny + outline + silhouette).
-
-### ✅ Milestone 3 — Digital Tailor V1
-Deterministic body-slice garment constructor. 8 recipes, 7 transforms, material system. Geometry-first: body silhouette is the authoritative contour.
-
-### ✅ Milestone 4 — AI Generators + Cleanup Workbench
-Lane C CV-assisted mask cleanup, custom stencil integration, body stencil clipping modes, generator pipelines (CoreML, LayerDiffuse, Inpaint), inpaint brush mask painter, cleanup workbench stencil dropdowns wired to the Stencil Editor.
+- **See-through project** (Lin, Li, Qin, Chan, Jin, Liu, Choy, Liu — Saint Francis University / U Penn / Spellbrush / Shitagaki Lab). "See-through: Single-image Layer Decomposition for Anime Characters," arXiv:2602.03749, Feb 2026. Paper doll Studio reuses their 19-class anime semantic taxonomy and the SAM checkpoint they trained (`24yearsold/l2d_sam_iter2`) as the foundation for all body parsing, garment extraction, and PNG import. Their paper does the architectural inverse of paperdoll (decompose dressed → per-part layers via SDXL) and showed me that user-driven attention is the right structural simplification on memory-constrained hardware.
+- **h94** — IP-Adapter weights (`h94/IP-Adapter`).
+- **xinntao** — RealESRGAN-anime upscaler.
+- **SmilingWolf** — WD-tagger v3 anime classifier.
+- **Sanster** — `anything-4.0-inpainting` (the SD 1.5 anime inpainting variant the worker uses).
+- **lllyasviel** — ControlNet weights, scheduler / sampler work.
+- **HuggingFace diffusers, transformers, accelerate** — the model serving stack.
+- **MediaPipe** (Google) — pose and hand landmarkers.
+- **Depth Anything V2**, **ISNet-anime**, **DWPose**, **rembg** — reference pack channels.
+- **ag-psd** — client-side PSD parser.

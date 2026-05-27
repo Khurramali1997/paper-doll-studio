@@ -1728,6 +1728,7 @@ function _invalidateAICache() {
 export function initImport(targetContainer) {
   livePreviewTargetContainer = targetContainer;
   wirePSDImport(targetContainer);
+  wireCharacterPNGImport(targetContainer);
   wireRigAutodetect();
   wireAssetIngest(targetContainer);
   wireMlBg(targetContainer);
@@ -2201,6 +2202,154 @@ async function loadAndParsePSD(file, targetContainer) {
   };
 
   reader.readAsArrayBuffer(file);
+}
+
+// ===== Character PNG Import (SAM auto-layer) =====
+
+function wireCharacterPNGImport(targetContainer) {
+  const dropZone = document.getElementById('character-png-drop-zone');
+  const input = document.getElementById('input-character-png');
+  if (dropZone) {
+    dropZone.addEventListener('click', () => input.click());
+    ['dragenter', 'dragover'].forEach(name => {
+      dropZone.addEventListener(name, () => dropZone.classList.add('dragover'));
+    });
+    ['dragleave', 'drop'].forEach(name => {
+      dropZone.addEventListener(name, () => dropZone.classList.remove('dragover'));
+    });
+    dropZone.addEventListener('drop', (e) => {
+      const f = e.dataTransfer.files?.[0];
+      if (f && /\.(png|jpe?g|webp)$/i.test(f.name)) {
+        loadAndParseCharacterPNG(f, targetContainer);
+      }
+    });
+  }
+  if (input) {
+    input.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        loadAndParseCharacterPNG(e.target.files[0], targetContainer);
+      }
+    });
+  }
+}
+
+async function loadAndParseCharacterPNG(file, targetContainer) {
+  const statusBox = document.getElementById('character-png-status');
+  const statusTxt = document.getElementById('txt-character-png-status');
+  const summaryBox = document.getElementById('character-png-summary');
+  const setStatus = (msg) => { if (statusTxt) statusTxt.textContent = msg; };
+  if (statusBox) statusBox.style.display = 'block';
+  if (summaryBox) summaryBox.style.display = 'none';
+  setStatus(`Uploading ${file.name}…`);
+
+  try {
+    const fd = new FormData();
+    fd.append('image', file, file.name);
+    fd.append('device', 'cpu');
+    fd.append('smooth', 'true');
+
+    setStatus('Running SemanticSam… (first run loads the model, may take a minute)');
+    const res = await fetch('/api/import-character-png', { method: 'POST', body: fd });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const d = await res.json(); detail = d.error || d.detail || detail; } catch {}
+      throw new Error(`HTTP ${res.status}: ${detail}`);
+    }
+    const manifest = await res.json();
+    const { canvas, layers } = manifest;
+    if (!layers || layers.length === 0) {
+      throw new Error('SAM detected no body-part regions in this image');
+    }
+
+    setStatus(`Fetching ${layers.length} extracted layer${layers.length === 1 ? '' : 's'}…`);
+    clearImageCache();
+    for (const layer of layers) {
+      const resp = await fetch(layer.url);
+      const blob = await resp.blob();
+      const localUrl = URL.createObjectURL(blob);
+      cacheImage(layer.file, localUrl, blob);
+    }
+
+    // Build DOLL_CONFIG.layers — server-side mapping already populated
+    // category/subcategory/z. For wardrobe layers we also need optionValue
+    // (used by getActiveLayers) so they show up under their slot's option.
+    const layersConfig = [];
+    const wardrobeBySlot = {};
+    for (const layer of layers) {
+      const meta = {
+        id: layer.id,
+        name: layer.name,
+        file: layer.file,
+        z: layer.z,
+        visible: true,
+        category: layer.category,
+        subcategory: layer.subcategory,
+      };
+      if (layer.toggleable) { meta.toggleable = true; meta.defaultVisible = true; }
+      if (layer.dyeable) meta.dyeable = true;
+      if (layer.category === 'wardrobe') {
+        meta.optionValue = 'imported';
+        (wardrobeBySlot[layer.subcategory] = wardrobeBySlot[layer.subcategory] || []).push(meta);
+      }
+      layersConfig.push(meta);
+    }
+
+    // Each detected wardrobe class becomes a one-option slot ("imported"),
+    // plus a "none" option so the user can hide it from the active view.
+    const wardrobeConfig = {};
+    for (const [slot, slotLayers] of Object.entries(wardrobeBySlot)) {
+      const displayName = slot.replace(/\b\w/g, c => c.toUpperCase());
+      wardrobeConfig[slot] = {
+        name: displayName,
+        options: [
+          { value: 'imported', name: 'Imported', layers: slotLayers.map(l => l.id) },
+          { value: 'none', name: 'Invisible / None', layers: [] },
+        ],
+        defaultValue: 'imported',
+      };
+    }
+
+    DOLL_CONFIG.canvas = { width: canvas.width, height: canvas.height };
+    DOLL_CONFIG.layers = layersConfig;
+    DOLL_CONFIG.wardrobe = wardrobeConfig;
+    // Skip explicit body_ref — generateBodyCompositeCanvas's live path will
+    // composite the non-wardrobe layers automatically, matching the active
+    // view (and respecting later layer reorders/visibility toggles).
+    DOLL_CONFIG.body_ref = null;
+
+    // Same finalisation path PSD import uses.
+    const { initializeState } = await import('./state.js');
+    initializeState();
+    buildUI(targetContainer);
+    buildCalibrateOptions();
+    renderDoll(targetContainer);
+    updateViewportTransform(document.getElementById('doll-container'));
+    clearCleanupWorkbench();
+    scheduleImportPreview();
+
+    document.getElementById('txt-model-base').textContent = `Pipeline: Character PNG (${file.name})`;
+
+    // Tell downstream listeners (stencil editor, calibration UI, etc.) that
+    // a fresh project just loaded. Same event PSD import dispatches, so the
+    // wiring is uniform.
+    window.dispatchEvent(new CustomEvent('paperdoll:psd-loaded', { detail: { filename: file.name, source: 'character-png' } }));
+
+    const bodyCount = layers.filter(l => l.category !== 'wardrobe').length;
+    const wardrobeCount = layers.length - bodyCount;
+    if (summaryBox) {
+      summaryBox.style.display = 'block';
+      summaryBox.textContent = `${file.name} → ${bodyCount} body layer${bodyCount === 1 ? '' : 's'} + ${wardrobeCount} wardrobe asset${wardrobeCount === 1 ? '' : 's'} across ${Object.keys(wardrobeConfig).length} slot${Object.keys(wardrobeConfig).length === 1 ? '' : 's'}.`;
+    }
+    setStatus(`${file.name} successfully imported!`);
+    setTimeout(() => {
+      if (statusBox) statusBox.style.display = 'none';
+      const details = document.getElementById('details-import-character-png');
+      if (details) details.removeAttribute('open');
+    }, 2500);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error: ${err.message}`);
+  }
 }
 
 // ===== Asset Ingestion =====

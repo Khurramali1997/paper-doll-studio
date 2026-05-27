@@ -22,10 +22,15 @@ public/assets/body_ref.png
 public/assets/body_regions/
 public/assets/coreml_generated/
 public/assets/layerdiffuse_generated/
+public/assets/garment_extracts/
+public/assets/character_pngs/
 
 # Extra virtual envs
 .venv-coreml/
 .venv-layerdiffuse/
+
+# Root-level master PSDs — kept on disk, never committed
+/*.psd
 
 # Scratch / test assets
 sprite_hermione-01.png

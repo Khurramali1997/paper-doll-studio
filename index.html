@@ -661,6 +661,32 @@
               </div>
             </details>
 
+            <!-- Import Character PNG (SAM auto-layer) section -->
+            <details class="control-group" id="details-import-character-png">
+              <summary style="cursor: pointer; font-weight: 600; font-size: 1rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                <span>🖼️ Import Character PNG (SAM auto-layer)</span>
+                <span class="details-toggle-icon" style="font-size: 0.8rem; color: var(--text-secondary);">▼</span>
+              </summary>
+              <div style="margin-top: 0.8rem;">
+                <p class="group-desc" style="margin-bottom: 0.4rem;">Drop a flat anime character PNG to auto-decompose into 19 SAM-detected body-part layers. No PSD required — the See-through 19-class segmenter assembles the paper doll from a single image.</p>
+                <p class="group-desc" style="margin-bottom: 0.6rem; font-size: 0.65rem; color: var(--text-secondary);">Naked-character inputs give a complete doll. Dressed inputs work but the naked-body composite will have holes where wardrobe covers the body — inpaint regeneration fills those naturally.</p>
+
+                <div class="file-drop-zone" id="character-png-drop-zone" style="padding: 1rem; gap: 0.5rem;">
+                  <span class="drop-icon" style="font-size: 1.5rem;">🧑‍🎨</span>
+                  <span class="drop-text" style="font-size: 0.75rem;">Drag & drop character PNG here, or <span class="browse-link">click to browse</span></span>
+                  <input type="file" id="input-character-png" accept="image/png,image/jpeg,image/webp" style="display: none;">
+                </div>
+
+                <div id="character-png-status" class="status-box" style="display: none; margin-top: 0.5rem; padding: 0.5rem;">
+                  <div class="spinner-container" style="font-size: 0.75rem;">
+                    <div class="spinner" style="width: 14px; height: 14px; border-width: 1.5px;"></div>
+                    <span id="txt-character-png-status">Running SemanticSam… (first run loads the model, may take a minute)</span>
+                  </div>
+                </div>
+                <div id="character-png-summary" style="display: none; margin-top: 0.5rem; padding: 0.5rem; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); font-size: 0.68rem; color: var(--text-secondary);"></div>
+              </div>
+            </details>
+
             <!-- Rig Authoring section -->
             <details class="control-group" id="details-rig-autodetect">
               <summary style="cursor: pointer; font-weight: 600; font-size: 1rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">

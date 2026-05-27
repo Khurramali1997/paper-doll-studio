@@ -477,6 +477,112 @@ async def extract_garments_endpoint(
     return JSONResponse({"job_id": job_id, "extracts": extracts})
 
 
+# Mapping from SAM's 19 anime body-part classes to paperdoll's layer taxonomy.
+# Used by /api/import-character-png to bootstrap DOLL_CONFIG from a flat PNG.
+# Each entry: (paperdoll category, paperdoll subcategory, default z, flags...).
+SAM_CLASS_TO_LAYER = {
+    "hair":       {"category": "hair",     "subcategory": "hair_front", "z": 70,  "toggleable": True, "dyeable": True},
+    "headwear":   {"category": "wardrobe", "subcategory": "headwear",   "z": 160},
+    "face":       {"category": "face",     "subcategory": "face",       "z": 50},
+    "eyes":       {"category": "eyes",     "subcategory": "eyes",       "z": 60,  "dyeable": True},
+    "eyewear":    {"category": "wardrobe", "subcategory": "eyewear",    "z": 140},
+    "ears":       {"category": "face",     "subcategory": "ears",       "z": 55},
+    "earwear":    {"category": "wardrobe", "subcategory": "earwear",    "z": 145},
+    "nose":       {"category": "face",     "subcategory": "nose",       "z": 62},
+    "mouth":      {"category": "face",     "subcategory": "mouth",      "z": 64},
+    "neck":       {"category": "face",     "subcategory": "neck",       "z": 40},
+    "neckwear":   {"category": "wardrobe", "subcategory": "neckwear",   "z": 130},
+    "topwear":    {"category": "wardrobe", "subcategory": "topwear",    "z": 100},
+    "handwear":   {"category": "wardrobe", "subcategory": "handwear",   "z": 110},
+    "bottomwear": {"category": "wardrobe", "subcategory": "bottomwear", "z": 100},
+    "legwear":    {"category": "wardrobe", "subcategory": "legwear",    "z": 105},
+    "footwear":   {"category": "wardrobe", "subcategory": "footwear",   "z": 110},
+    "tail":       {"category": "body",     "subcategory": "tail",       "z": 15},
+    "wings":      {"category": "body",     "subcategory": "wings",      "z": 5},
+    "objects":    {"category": "wardrobe", "subcategory": "objects",    "z": 200},
+}
+
+
+@app.post("/api/import-character-png")
+async def import_character_png_endpoint(
+    image: UploadFile = File(...),
+    ckpt: str = Form("24yearsold/l2d_sam_iter2"),
+    device: str = Form("cpu"),
+    smooth: bool = Form(True),
+    min_pixels: int = Form(50),
+):
+    """Bootstrap a paperdoll project from a flat character PNG.
+
+    Runs SemanticSam to decompose the image into per-class RGBA layers, then
+    returns a manifest the frontend uses to build DOLL_CONFIG.layers and
+    DOLL_CONFIG.wardrobe. Non-wardrobe classes become body layers; wardrobe
+    classes become layered wardrobe assets with auto-built slot configs.
+
+    For naked-character inputs this gives a complete doll. For dressed inputs
+    the body has holes where wardrobe covered it (no occlusion completion);
+    inpaint regeneration of those slots fills naturally because the mask
+    covers the same regions.
+    """
+    try:
+        from compiler.body_parser import extract_all_classes
+    except ImportError:
+        return JSONResponse({"error": "sam deps not installed"}, status_code=503)
+
+    data = await image.read()
+    try:
+        pil_img = _PILImage.open(_io.BytesIO(data)).convert("RGB")
+    except Exception as exc:
+        return JSONResponse({"error": f"could not decode image: {exc}"}, status_code=400)
+
+    try:
+        cutouts = extract_all_classes(
+            pil_img, ckpt=ckpt, device=device, smooth=smooth, min_pixels=min_pixels,
+        )
+    except ImportError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    if not cutouts:
+        return JSONResponse({"error": "SAM detected no classes in this image"}, status_code=422)
+
+    job_id = uuid.uuid4().hex[:12]
+    out_dir = Path("public") / "assets" / "character_pngs" / job_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    canvas = {"width": pil_img.width, "height": pil_img.height}
+    layers = []
+    for class_name, rgba_img in cutouts.items():
+        out_path = out_dir / f"{class_name}.png"
+        rgba_img.save(str(out_path))
+        alpha = rgba_img.split()[-1]
+        pixel_count = int(sum(1 for v in alpha.getdata() if v > 0))
+        mapping = SAM_CLASS_TO_LAYER.get(class_name, {
+            "category": "body", "subcategory": class_name, "z": 50,
+        })
+        layers.append({
+            "id": f"sam_{class_name}",
+            "name": class_name,
+            "file": f"character_pngs/{job_id}/{class_name}.png",
+            "url": f"/public/assets/character_pngs/{job_id}/{class_name}.png",
+            "z": mapping["z"],
+            "visible": True,
+            "category": mapping["category"],
+            "subcategory": mapping["subcategory"],
+            "toggleable": bool(mapping.get("toggleable", False)),
+            "dyeable": bool(mapping.get("dyeable", False)),
+            "sam_class": class_name,
+            "pixel_count": pixel_count,
+        })
+
+    return JSONResponse({
+        "job_id": job_id,
+        "canvas": canvas,
+        "layers": layers,
+        "asset_dir": f"/public/assets/character_pngs/{job_id}/",
+    })
+
+
 @app.get("/api/inpaint/status")
 async def inpaint_status_endpoint():
     return JSONResponse(inpaint_status())

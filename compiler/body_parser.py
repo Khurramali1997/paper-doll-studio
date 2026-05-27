@@ -131,6 +131,49 @@ def _smooth_mask(mask_u8):
     return np.clip(blurred, 0, 255).astype(np.uint8)
 
 
+def extract_all_classes(
+    pil_image: "PILImage",
+    ckpt: str = _DEFAULT_CKPT,
+    device: str = "cpu",
+    threshold: float = 0.0,
+    smooth: bool = True,
+    min_pixels: int = 50,
+) -> dict[str, "PILImage"]:
+    """Run SemanticSam and return RGBA cutouts for every detected class.
+
+    Same SAM inference as extract_garments, but returns all 19 body-part
+    classes (not just the garment subset). Used by the PNG-import bootstrap
+    flow that turns a flat character image into a layered paper doll.
+    """
+    try:
+        import torch
+        import numpy as np
+    except ImportError as exc:
+        raise ImportError("torch/numpy required for class extraction") from exc
+
+    model = _load_model(ckpt, device)
+    rgb_np = np.array(pil_image.convert("RGB"))
+
+    with torch.inference_mode():
+        preds = model.inference(rgb_np)[0]
+        masks_np = (preds > threshold).to(device="cpu", dtype=torch.uint8).numpy()
+
+    from PIL import Image as _PIL
+    result: dict[str, _PIL.Image] = {}
+    for idx, part_name in enumerate(BODY_PARTS):
+        if idx >= masks_np.shape[0]:
+            break
+        mask_u8 = (masks_np[idx] * 255).astype(np.uint8)
+        if smooth:
+            mask_u8 = _smooth_mask(mask_u8)
+        if int((mask_u8 > 0).sum()) < min_pixels:
+            continue
+        rgba = np.dstack([rgb_np, mask_u8])
+        result[part_name] = _PIL.fromarray(rgba, mode="RGBA")
+
+    return result
+
+
 def extract_garments(
     pil_image: "PILImage",
     ckpt: str = _DEFAULT_CKPT,
