@@ -916,10 +916,20 @@ function bindEvents() {
   el('btn-fabric-download-manifest')?.addEventListener('click', downloadFabricManifest);
   el('btn-inpaint-generate')?.addEventListener('click', buildInpaintGeneration);
   el('btn-inpaint-to-cleanup')?.addEventListener('click', sendInpaintToCleanup);
+  el('btn-inpaint-extract-garments')?.addEventListener('click', () => {
+    document.getElementById('details-garment-extract')?.setAttribute('open', '');
+    extractGarmentsFromLastInpaint();
+  });
+  el('btn-garment-extract-run')?.addEventListener('click', extractGarmentsFromLastInpaint);
+  el('btn-garment-select-all')?.addEventListener('click', _selectAllGarmentCards);
+  el('btn-garment-merge-selected')?.addEventListener('click', _mergeSelectedGarmentCards);
   initInpaintBrush();
   el('chk-inpaint-fast')?.addEventListener('change', event => {
-    const steps = el('num-inpaint-steps');
-    if (steps) steps.value = event.target.checked ? '10' : '20';
+    const steps = el('range-inpaint-steps');
+    const lbl = el('lbl-inpaint-steps');
+    const v = event.target.checked ? '10' : '20';
+    if (steps) steps.value = v;
+    if (lbl) lbl.textContent = v;
   });
   el('select-fabric-wardrobe')?.addEventListener('change', () => {
     const sel = el('select-fabric-wardrobe');
@@ -1626,6 +1636,17 @@ function _configureCleanupForGenerator() {
 
 let _inpaintResult = null;
 
+// Mirrors GARMENT_PARTS in compiler/body_parser.py — keep in sync.
+const GARMENT_SLOTS = [
+  'headwear', 'neckwear', 'topwear', 'handwear',
+  'bottomwear', 'legwear', 'footwear',
+];
+const GARMENT_LABELS = {
+  headwear: 'Headwear', neckwear: 'Neckwear', topwear: 'Topwear',
+  handwear: 'Handwear', bottomwear: 'Bottomwear', legwear: 'Legwear',
+  footwear: 'Footwear',
+};
+
 // --- Inpaint brush ---
 const _brush = {
   active: false,
@@ -1778,10 +1799,37 @@ function initInpaintBrush() {
   el('chk-inpaint-controlnet')?.addEventListener('change', e => {
     const opts = el('inpaint-controlnet-options');
     if (opts) opts.style.display = e.target.checked ? 'flex' : 'none';
+    // Mutex with IP-Adapter — both loaded simultaneously OOMs M-series 16 GB.
+    if (e.target.checked) {
+      const ip = el('chk-inpaint-ip-adapter');
+      if (ip?.checked) { ip.checked = false; ip.dispatchEvent(new Event('change')); }
+    }
   });
   el('range-inpaint-controlnet-scale')?.addEventListener('input', e => {
     const lbl = el('lbl-inpaint-controlnet-scale');
     if (lbl) lbl.textContent = parseFloat(e.target.value).toFixed(2);
+  });
+  el('chk-inpaint-ip-adapter')?.addEventListener('change', e => {
+    const opts = el('inpaint-ip-options');
+    if (opts) opts.style.display = e.target.checked ? 'flex' : 'none';
+    if (e.target.checked) {
+      const cn = el('chk-inpaint-controlnet');
+      if (cn?.checked) { cn.checked = false; cn.dispatchEvent(new Event('change')); }
+    }
+  });
+  el('range-inpaint-ip-scale')?.addEventListener('input', e => {
+    const lbl = el('lbl-inpaint-ip-scale');
+    if (lbl) lbl.textContent = parseFloat(e.target.value).toFixed(2);
+  });
+  el('file-inpaint-ip-reference')?.addEventListener('change', _validateInpaintControls);
+  el('chk-inpaint-ip-adapter')?.addEventListener('change', _validateInpaintControls);
+  el('range-inpaint-strength')?.addEventListener('input', e => {
+    const lbl = el('lbl-inpaint-strength');
+    if (lbl) lbl.textContent = parseFloat(e.target.value).toFixed(2);
+  });
+  el('range-inpaint-steps')?.addEventListener('input', e => {
+    const lbl = el('lbl-inpaint-steps');
+    if (lbl) lbl.textContent = e.target.value;
   });
 }
 // --- end inpaint brush ---
@@ -1819,6 +1867,131 @@ async function maskBlobForInpaint() {
 
 let _currentInpaintJobId = null;
 
+// Build a FormData with every UI-driven inpaint parameter wired in EXCEPT
+// the image, mask, garment_slot, and ip_reference file — callers append those
+// last so the same helper serves first-pass generation and per-garment
+// refinement.
+function _buildInpaintFormDataBase(prompt) {
+  const fd = new FormData();
+  fd.append('prompt', prompt);
+  fd.append('negative_prompt', el('txt-inpaint-negative')?.value || '');
+  fd.append('seed', el('num-inpaint-seed')?.value || '93');
+  fd.append('steps', el('range-inpaint-steps')?.value || '10');
+  fd.append('guidance_scale', el('num-inpaint-guidance')?.value || '7');
+  fd.append('strength', el('range-inpaint-strength')?.value || '0.5');
+  fd.append('device', el('select-inpaint-device')?.value || 'auto');
+  fd.append('fast', el('chk-inpaint-fast')?.checked ? 'true' : 'false');
+  fd.append('dilate', el('range-inpaint-dilate')?.value || '6');
+  fd.append('feather', el('range-inpaint-feather')?.value || '8');
+  fd.append('controlnet', el('chk-inpaint-controlnet')?.checked ? 'true' : 'false');
+  fd.append('controlnet_model', el('txt-inpaint-controlnet-model')?.value || 'lllyasviel/control_v11p_sd15_canny');
+  fd.append('controlnet_scale', el('range-inpaint-controlnet-scale')?.value || '0.5');
+  fd.append('ip_adapter', el('chk-inpaint-ip-adapter')?.checked ? 'true' : 'false');
+  fd.append('ip_scale', el('range-inpaint-ip-scale')?.value || '0.6');
+  fd.append('upscaler', el('select-inpaint-upscaler')?.value || 'lanczos');
+  fd.append('mask_smooth', el('chk-inpaint-smooth')?.checked ? 'true' : 'false');
+  fd.append('model_repo', el('txt-inpaint-model-repo')?.value || '');
+  // Diffusion is pinned to 512 — the worker always runs the pipeline at
+  // SD 1.5's native resolution. Output size is an optional downscale cap on
+  // the longest edge; by default we target the full canvas dim so cleanup +
+  // wardrobe ingest see a 1:1 image.
+  fd.append('width', '512');
+  fd.append('height', '512');
+  const snap8 = v => Math.max(8, Math.round(v / 8) * 8);
+  const rawW = DOLL_CONFIG.canvas?.width || 512;
+  const rawH = DOLL_CONFIG.canvas?.height || 512;
+  const longest = Math.max(rawW, rawH);
+  const outputDim = parseInt(el('txt-inpaint-max-dim')?.value || String(longest), 10) || longest;
+  const scale = outputDim < longest ? outputDim / longest : 1;
+  fd.append('target_width', String(snap8(rawW * scale)));
+  fd.append('target_height', String(snap8(rawH * scale)));
+  return fd;
+}
+
+// Pull the IP-Adapter reference file from the picker. Returns null if either
+// IP-Adapter is disabled or no file was selected — the worker treats both as
+// "skip IP conditioning" so the call still goes through cleanly.
+function _ipReferenceFile() {
+  if (!el('chk-inpaint-ip-adapter')?.checked) return null;
+  const picker = el('file-inpaint-ip-reference');
+  return picker?.files?.[0] || null;
+}
+
+// Disable the Generate button while the inpaint controls are in an
+// unsubmittable state (currently: IP-Adapter on but no reference picked).
+// The worker has a server-side no-op fallback for this case, but blocking
+// at the button surfaces the missing input to the user immediately.
+function _validateInpaintControls() {
+  const btn = el('btn-inpaint-generate');
+  if (!btn) return;
+  const ipOn = !!el('chk-inpaint-ip-adapter')?.checked;
+  const ipFile = el('file-inpaint-ip-reference')?.files?.[0] || null;
+  const ipMissing = ipOn && !ipFile;
+  btn.disabled = ipMissing;
+  btn.title = ipMissing
+    ? 'IP-Adapter is enabled but no reference image is selected. Pick one or disable IP-Adapter.'
+    : '';
+}
+
+// POST the job, stream SSE progress, update preview + _inpaintResult on
+// success. Returns a promise that resolves to the result event (or undefined
+// for cancellation). Throws on error.
+async function _submitInpaintJob(fd) {
+  setInpaintStatus('Starting worker… (first run loads the model, may take a minute)');
+  const res = await fetch('/api/inpaint/generate', { method: 'POST', body: fd });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const d = await res.json(); detail = d.detail || detail; } catch {}
+    throw new Error(`HTTP ${res.status}: ${detail}`);
+  }
+  const { job_id } = await res.json();
+  _currentInpaintJobId = job_id;
+  setInpaintStatus('Running inpainting…');
+
+  return new Promise((resolve, reject) => {
+    const evtSource = new EventSource(`/api/inpaint/progress/${job_id}`);
+    evtSource.onmessage = (e) => {
+      let event;
+      try { event = JSON.parse(e.data); } catch { return; }
+
+      if (event.type === 'progress') {
+        setInpaintProgress(event.step / event.total);
+        setInpaintStatus(`Step ${event.step} / ${event.total}…`);
+
+      } else if (event.type === 'result') {
+        evtSource.close();
+        _inpaintResult = event;
+        const preview = el('inpaint-preview-img');
+        if (preview) preview.src = `data:image/png;base64,${event.image_b64}`;
+        const meta = el('inpaint-meta');
+        if (meta) {
+          const m = event.metadata || {};
+          const cnTag = m.controlnet ? ' · ControlNet' : '';
+          meta.textContent = `seed ${m.seed ?? ''} · ${m.steps ?? ''} steps${cnTag}`;
+        }
+        if (el('inpaint-result')) el('inpaint-result').style.display = 'block';
+        setInpaintStatus('');
+        setInpaintProgress(0);
+        resolve(event);
+
+      } else if (event.type === 'cancelled') {
+        evtSource.close();
+        setInpaintStatus('Cancelled.');
+        setInpaintProgress(0);
+        resolve(undefined);
+
+      } else if (event.type === 'error') {
+        evtSource.close();
+        reject(new Error(event.message));
+      }
+    };
+    evtSource.onerror = () => {
+      evtSource.close();
+      reject(new Error('Lost connection to generation stream'));
+    };
+  });
+}
+
 async function buildInpaintGeneration() {
   const prompt = (el('txt-inpaint-prompt')?.value || '').trim();
   if (!prompt) { setInpaintStatus('Prompt is required.', true); return; }
@@ -1838,84 +2011,22 @@ async function buildInpaintGeneration() {
     ]);
     const bodyBlob = await canvasToBlob(bodyCanvas);
 
-    const fd = new FormData();
-    fd.append('prompt', prompt);
-    fd.append('negative_prompt', el('txt-inpaint-negative')?.value || '');
-    fd.append('seed', el('num-inpaint-seed')?.value || '93');
-    fd.append('steps', el('num-inpaint-steps')?.value || '20');
-    fd.append('guidance_scale', el('num-inpaint-guidance')?.value || '7');
-    fd.append('strength', el('num-inpaint-strength')?.value || '1.0');
-    fd.append('device', el('select-inpaint-device')?.value || 'auto');
-    fd.append('fast', el('chk-inpaint-fast')?.checked ? 'true' : 'false');
-    fd.append('dilate', el('range-inpaint-dilate')?.value || '6');
-    fd.append('feather', el('range-inpaint-feather')?.value || '8');
-    fd.append('controlnet', el('chk-inpaint-controlnet')?.checked ? 'true' : 'false');
-    fd.append('controlnet_model', el('txt-inpaint-controlnet-model')?.value || 'lllyasviel/control_v11p_sd15_canny');
-    fd.append('controlnet_scale', el('range-inpaint-controlnet-scale')?.value || '0.5');
-    fd.append('model_repo', el('txt-inpaint-model-repo')?.value || '');
-    const snap8 = v => Math.max(8, Math.round(v / 8) * 8);
-    const inpaintMaxDim = parseInt(el('txt-inpaint-max-dim')?.value || '768', 10) || 768;
-    const rawW = DOLL_CONFIG.canvas?.width || 512;
-    const rawH = DOLL_CONFIG.canvas?.height || 512;
-    const scale = Math.min(1, inpaintMaxDim / Math.max(rawW, rawH));
-    fd.append('width', String(snap8(rawW * scale)));
-    fd.append('height', String(snap8(rawH * scale)));
+    const fd = _buildInpaintFormDataBase(prompt);
+    // If the selected mask stencil is a SAM garment region (sam:topwear etc.),
+    // pass the class as garment_slot so the worker wraps the prompt with a
+    // slot-aware positive/negative scaffold.
+    const stencilSel = el('select-inpaint-mask-stencil')?.value || '';
+    if (stencilSel.startsWith('sam:')) {
+      const slot = stencilSel.slice(4);
+      if (GARMENT_SLOTS.includes(slot)) fd.append('garment_slot', slot);
+    }
     fd.append('image', bodyBlob, 'body_composite.png');
     fd.append('mask', maskBlob, 'garment_mask.png');
+    const ipFile = _ipReferenceFile();
+    if (ipFile) fd.append('ip_reference', ipFile, ipFile.name || 'ip_reference.png');
 
-    setInpaintStatus('Starting worker… (first run loads the model, may take a minute)');
-    const res = await fetch('/api/inpaint/generate', { method: 'POST', body: fd });
-    if (!res.ok) {
-      let detail = res.statusText;
-      try { const d = await res.json(); detail = d.detail || detail; } catch {}
-      throw new Error(`HTTP ${res.status}: ${detail}`);
-    }
-    const { job_id } = await res.json();
-    _currentInpaintJobId = job_id;
-    setInpaintStatus('Running inpainting…');
-
-    await new Promise((resolve, reject) => {
-      const evtSource = new EventSource(`/api/inpaint/progress/${job_id}`);
-      evtSource.onmessage = (e) => {
-        let event;
-        try { event = JSON.parse(e.data); } catch { return; }
-
-        if (event.type === 'progress') {
-          setInpaintProgress(event.step / event.total);
-          setInpaintStatus(`Step ${event.step} / ${event.total}…`);
-
-        } else if (event.type === 'result') {
-          evtSource.close();
-          _inpaintResult = event;
-          const preview = el('inpaint-preview-img');
-          if (preview) preview.src = `data:image/png;base64,${event.image_b64}`;
-          const meta = el('inpaint-meta');
-          if (meta) {
-            const m = event.metadata || {};
-            const cnTag = m.controlnet ? ' · ControlNet' : '';
-            meta.textContent = `seed ${m.seed ?? ''} · ${m.steps ?? ''} steps${cnTag}`;
-          }
-          if (el('inpaint-result')) el('inpaint-result').style.display = 'block';
-          setInpaintStatus('');
-          setInpaintProgress(0);
-          resolve();
-
-        } else if (event.type === 'cancelled') {
-          evtSource.close();
-          setInpaintStatus('Cancelled.');
-          setInpaintProgress(0);
-          resolve();
-
-        } else if (event.type === 'error') {
-          evtSource.close();
-          reject(new Error(event.message));
-        }
-      };
-      evtSource.onerror = () => {
-        evtSource.close();
-        reject(new Error('Lost connection to generation stream'));
-      };
-    });
+    await _submitInpaintJob(fd);
+    _markGarmentGridStale();
   } catch (err) {
     setInpaintStatus(`Inpaint error: ${err.message || err}`, true);
     setInpaintProgress(0);
@@ -1982,7 +2093,315 @@ async function sendInpaintToCleanup() {
   }
 
   _configureCleanupForGenerator();
-  await receiveAssetForCleanup(blob, `inpaint_${seed}.png`);
+  await receiveAssetForCleanup(await _toCanvasSizedBlob(blob), `inpaint_${seed}.png`);
+}
+
+// The cleanup workbench's fit logic caps at 1:1 (it never scales up), so an
+// asset smaller than canvas would sit in the corner. Resize any handoff blob
+// to canvas dims first so it lands as a full-canvas RGBA regardless of where
+// it came from (worker upscale, SAM extract, anything else).
+async function _toCanvasSizedBlob(srcBlob) {
+  const docW = DOLL_CONFIG?.canvas?.width || 768;
+  const docH = DOLL_CONFIG?.canvas?.height || 768;
+  const url = URL.createObjectURL(srcBlob);
+  try {
+    const img = await loadImage(url);
+    if (img.naturalWidth === docW && img.naturalHeight === docH) return srcBlob;
+    const c = document.createElement('canvas');
+    c.width = docW;
+    c.height = docH;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, docW, docH);
+    return canvasToBlob(c);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function _setGarmentExtractStatus(msg, isError = false) {
+  const box = el('garment-extract-status');
+  if (!box) return;
+  if (!msg) { box.style.display = 'none'; box.textContent = ''; return; }
+  box.style.display = 'block';
+  box.textContent = msg;
+  box.style.color = isError ? 'var(--accent-warn, #ff6464)' : 'var(--text-secondary)';
+}
+
+// Convert an RGBA cutout PNG (the SAM output) into a binary L-mode mask blob.
+// White (255) where the cutout is opaque, black where transparent — exactly
+// the mask format the inpaint worker expects.
+async function _cutoutAlphaToMaskBlob(cutoutUrl) {
+  const img = await loadImage(cutoutUrl);
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, c.width, c.height);
+  const px = data.data;
+  for (let i = 0; i < px.length; i += 4) {
+    const v = px[i + 3] > 10 ? 255 : 0;
+    px[i] = v; px[i + 1] = v; px[i + 2] = v; px[i + 3] = 255;
+  }
+  ctx.putImageData(data, 0, 0);
+  return canvasToBlob(c);
+}
+
+// Mark the SAM card grid as stale (composite has changed, cutouts are stale).
+// Visual: dim cards + show a one-line "Re-extract" prompt in the status box.
+function _markGarmentGridStale() {
+  const grid = el('garment-extract-grid');
+  if (!grid || grid.style.display === 'none') return;
+  for (const card of grid.querySelectorAll('.garment-card')) {
+    card.style.opacity = '0.45';
+    card.dataset.stale = '1';
+  }
+  _setGarmentExtractStatus('Composite changed — re-extract to refresh cutouts.');
+}
+
+// Run a second inpaint pass focused on a single garment region.
+// Base image = naked body composite (enforces the naked-body invariant —
+// see js/export.js:generateBodyCompositeCanvas). Mask = SAM cutout alpha for
+// the slot. Worker returns a canvas-sized RGBA with only the refined garment
+// opaque; we alpha-composite it onto the previous preview locally to update
+// the composite without a SAM re-extract round-trip.
+async function refineGarment(slot, cutoutUrl, refineBtn) {
+  const prevB64 = _inpaintResult?.image_b64;
+  if (!prevB64) {
+    _setGarmentExtractStatus('Generate an inpaint result first.', true);
+    return;
+  }
+  const prompt = (el('txt-inpaint-prompt')?.value || '').trim();
+  if (!prompt) {
+    _setGarmentExtractStatus('Enter a prompt above before refining.', true);
+    return;
+  }
+
+  const cancelBtn = el('btn-inpaint-cancel');
+  if (refineBtn) refineBtn.disabled = true;
+  if (cancelBtn) { cancelBtn.style.display = 'inline-block'; cancelBtn.onclick = cancelInpaintJob; }
+  setInpaintProgress(0);
+  setInpaintStatus(`Preparing ${slot} refinement…`);
+
+  try {
+    const [bodyCanvas, maskBlob] = await Promise.all([
+      generateBodyCompositeCanvas(),
+      _cutoutAlphaToMaskBlob(cutoutUrl),
+    ]);
+    const baseBlob = await canvasToBlob(bodyCanvas);
+
+    const fd = _buildInpaintFormDataBase(prompt);
+    fd.append('garment_slot', slot);
+    fd.append('crop_output', 'true');
+    fd.append('image', baseBlob, 'naked_body.png');
+    fd.append('mask', maskBlob, `${slot}_mask.png`);
+    const ipFile = _ipReferenceFile();
+    if (ipFile) fd.append('ip_reference', ipFile, ipFile.name || 'ip_reference.png');
+
+    const event = await _submitInpaintJob(fd);
+    if (!event?.image_b64) return; // cancelled
+
+    // The worker returned a canvas-sized RGBA with only the refined garment
+    // opaque. Composite it on top of the previous preview to make the new
+    // composite, then push that back into _inpaintResult + the preview img.
+    // _submitInpaintJob already set the preview to the cropped RGBA — we
+    // overwrite that with the composited version here.
+    const [prevImg, cropImg] = await Promise.all([
+      loadImage('data:image/png;base64,' + prevB64),
+      loadImage('data:image/png;base64,' + event.image_b64),
+    ]);
+    const c = document.createElement('canvas');
+    c.width = prevImg.naturalWidth;
+    c.height = prevImg.naturalHeight;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(prevImg, 0, 0);
+    ctx.drawImage(cropImg, 0, 0, c.width, c.height);
+    const compositeDataUrl = c.toDataURL('image/png');
+    const newB64 = compositeDataUrl.split(',')[1];
+    _inpaintResult = { ..._inpaintResult, image_b64: newB64 };
+    const preview = el('inpaint-preview-img');
+    if (preview) preview.src = compositeDataUrl;
+
+    // Other slots may have shifted slightly inside the dilation band — mark
+    // the grid stale so the user can re-extract if they want clean cutouts.
+    _markGarmentGridStale();
+  } catch (err) {
+    setInpaintStatus(`Refine error: ${err.message || err}`, true);
+    setInpaintProgress(0);
+  } finally {
+    _currentInpaintJobId = null;
+    if (refineBtn) refineBtn.disabled = false;
+    if (cancelBtn) cancelBtn.style.display = 'none';
+  }
+}
+
+// Build one card for the garment-extract grid. Handles both SAM extracts
+// (slot + url + pixel_count + bbox) and user-merged synthetic cards (which
+// pass a `merged: true` flag and skip the Refine button since there's no
+// single slot to scaffold the prompt with).
+function _buildGarmentCard(ex, seed) {
+  const card = document.createElement('div');
+  card.className = 'garment-card';
+  card.dataset.slot = ex.slot;
+  if (ex.merged) card.dataset.merged = '1';
+  card.style.cssText = 'display: flex; flex-direction: column; gap: 0.3rem; padding: 0.4rem; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); position: relative;';
+  const label = GARMENT_LABELS[ex.slot] || ex.slot;
+  const refineBtnHtml = ex.merged
+    ? ''
+    : `<button type="button" class="cleanup-tool-btn" data-action="refine-inpaint" title="Re-inpaint this garment region using the current main prompt" style="flex: 1; font-size: 0.66rem; padding: 0.3rem 0.3rem;">Refine</button>`;
+  card.innerHTML = `
+    <label style="position: absolute; top: 0.3rem; left: 0.3rem; display: flex; align-items: center; gap: 0.25rem; background: rgba(0,0,0,0.5); padding: 0.15rem 0.3rem; border-radius: 4px; cursor: pointer; z-index: 1;">
+      <input type="checkbox" class="garment-card-checkbox" style="margin: 0; cursor: pointer;">
+    </label>
+    <img src="${ex.url}" alt="${label}" style="width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 4px; background: repeating-conic-gradient(rgba(255,255,255,0.04) 0% 25%, transparent 0% 50%) 50% / 12px 12px;">
+    <div style="font-size: 0.7rem; color: var(--text-primary); font-weight: 600;">${label}</div>
+    <div style="font-size: 0.6rem; color: var(--text-secondary);">${(ex.pixel_count || 0).toLocaleString()} px${ex.merged ? ' · merged' : ''}</div>
+    <div style="display: flex; gap: 0.3rem;">
+      ${refineBtnHtml}
+      <button type="button" class="cleanup-tool-btn" data-action="send-cleanup" title="Send this cutout to the Cleanup Workbench for alpha cleanup and wardrobe ingest" style="flex: 1; font-size: 0.66rem; padding: 0.3rem 0.3rem;">To Cleanup</button>
+    </div>
+  `;
+  card.querySelector('.garment-card-checkbox').addEventListener('change', _updateMergeSelectedButton);
+  const refineBtn = card.querySelector('[data-action="refine-inpaint"]');
+  if (refineBtn) {
+    refineBtn.addEventListener('click', () => refineGarment(ex.slot, ex.url, refineBtn));
+  }
+  card.querySelector('[data-action="send-cleanup"]').addEventListener('click', async () => {
+    if (card.dataset.stale === '1') {
+      _setGarmentExtractStatus(`${label} cutout is stale — re-extract first.`, true);
+      return;
+    }
+    try {
+      _setGarmentExtractStatus(`Loading ${ex.slot} into Cleanup Workbench…`);
+      const imgResp = await fetch(ex.url);
+      const blob = await imgResp.blob();
+      _configureCleanupForGenerator();
+      await receiveAssetForCleanup(await _toCanvasSizedBlob(blob), `${ex.slot}_${seed}.png`);
+      _setGarmentExtractStatus(`${label} sent to Cleanup Workbench.`);
+    } catch (err) {
+      _setGarmentExtractStatus(`Failed to load ${ex.slot}: ${err.message}`, true);
+    }
+  });
+  return card;
+}
+
+function _updateMergeSelectedButton() {
+  const btn = el('btn-garment-merge-selected');
+  if (!btn) return;
+  const checked = document.querySelectorAll('.garment-card-checkbox:checked').length;
+  btn.disabled = checked < 2;
+  btn.textContent = `Merge selected (${checked})`;
+  btn.title = checked < 2
+    ? 'Select at least 2 cards to merge them into one cutout.'
+    : `Combine ${checked} cards into a single RGBA cutout via union of their alphas.`;
+}
+
+// Union the selected cards' alphas into one composite RGBA. Each SAM extract
+// already shares the same RGB (from the source composite); drawing them on
+// top of each other with default source-over compositing yields a clean
+// union, because where one card is transparent another may be opaque.
+async function _mergeSelectedGarmentCards() {
+  const checkboxes = Array.from(document.querySelectorAll('.garment-card-checkbox:checked'));
+  if (checkboxes.length < 2) return;
+  const cards = checkboxes.map(cb => cb.closest('.garment-card')).filter(Boolean);
+  if (cards.length < 2) return;
+
+  _setGarmentExtractStatus(`Merging ${cards.length} cutouts…`);
+  try {
+    const imgUrls = cards.map(card => card.querySelector('img')?.src).filter(Boolean);
+    const imgs = await Promise.all(imgUrls.map(loadImage));
+    const w = imgs[0].naturalWidth;
+    const h = imgs[0].naturalHeight;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    for (const img of imgs) ctx.drawImage(img, 0, 0, w, h);
+
+    // Count visible pixels in the merged result for the card label.
+    const data = ctx.getImageData(0, 0, w, h).data;
+    let pixelCount = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 10) pixelCount++;
+
+    const dataUrl = c.toDataURL('image/png');
+    const slotsLabel = cards.map(card => card.dataset.slot).join('+');
+    const grid = el('garment-extract-grid');
+    if (grid) {
+      grid.appendChild(_buildGarmentCard({
+        slot: slotsLabel,
+        url: dataUrl,
+        pixel_count: pixelCount,
+        merged: true,
+      }, _inpaintResult?.metadata?.seed ?? 'seed'));
+    }
+    GARMENT_LABELS[slotsLabel] = slotsLabel.split('+').map(s => GARMENT_LABELS[s] || s).join(' + ');
+    _setGarmentExtractStatus(`Merged into a single cutout (${pixelCount.toLocaleString()} px).`);
+    // Clear checkboxes so the user can stage a different merge next.
+    for (const cb of checkboxes) cb.checked = false;
+    _updateMergeSelectedButton();
+  } catch (err) {
+    _setGarmentExtractStatus(`Merge failed: ${err.message}`, true);
+  }
+}
+
+function _selectAllGarmentCards() {
+  const boxes = document.querySelectorAll('.garment-card-checkbox');
+  // If everything is already selected, treat this as a deselect-all toggle.
+  const allSelected = Array.from(boxes).every(b => b.checked);
+  for (const b of boxes) b.checked = !allSelected;
+  _updateMergeSelectedButton();
+}
+
+async function extractGarmentsFromLastInpaint() {
+  if (!_inpaintResult?.image_b64) {
+    _setGarmentExtractStatus('Generate an inpaint result first.', true);
+    return;
+  }
+  const grid = el('garment-extract-grid');
+  if (grid) { grid.innerHTML = ''; grid.style.display = 'none'; }
+  const actions = el('garment-extract-actions');
+  if (actions) actions.style.display = 'none';
+  _updateMergeSelectedButton();
+  _setGarmentExtractStatus('Running SemanticSam… (first run loads the model)');
+
+  try {
+    // Decode the base64 inpaint result back to a blob for upload.
+    const resp = await fetch('data:image/png;base64,' + _inpaintResult.image_b64);
+    const imgBlob = await resp.blob();
+
+    const fd = new FormData();
+    fd.append('image', imgBlob, 'inpaint_result.png');
+    fd.append('device', el('select-inpaint-device')?.value || 'cpu');
+    fd.append('smooth', 'true');
+
+    const res = await fetch('/api/extract-garments', { method: 'POST', body: fd });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const d = await res.json(); detail = d.error || d.detail || detail; } catch {}
+      throw new Error(`HTTP ${res.status}: ${detail}`);
+    }
+    const data = await res.json();
+    const extracts = data.extracts || [];
+    if (!extracts.length) {
+      _setGarmentExtractStatus('No garment regions detected. Try a different prompt or seed.', true);
+      return;
+    }
+
+    const seed = _inpaintResult.metadata?.seed ?? 'seed';
+    const actions = el('garment-extract-actions');
+    if (grid) {
+      grid.style.display = 'grid';
+      for (const ex of extracts) {
+        grid.appendChild(_buildGarmentCard(ex, seed));
+      }
+    }
+    if (actions) actions.style.display = 'flex';
+    _updateMergeSelectedButton();
+    _setGarmentExtractStatus(`Extracted ${extracts.length} garment region${extracts.length === 1 ? '' : 's'}.`);
+  } catch (err) {
+    _setGarmentExtractStatus(`Extraction failed: ${err.message}`, true);
+  }
 }
 
 export function registerPSDLayerMasks(masks) {

@@ -1,5 +1,5 @@
 import { DOLL_CONFIG, state, exportStateJSON } from './state.js';
-import { localImageCache, localBlobCache } from './render.js';
+import { localImageCache, localBlobCache, generateDynamicBodyReferenceCanvas } from './render.js';
 import { downloadBlob, loadImage } from './utils.js';
 
 const SILHOUETTE_EXCLUDED_CATEGORIES = new Set(['hair']);
@@ -62,36 +62,35 @@ export async function downloadBodySilhouette() {
 export async function generateBodyCompositeCanvas() {
   const docW = DOLL_CONFIG.canvas.width;
   const docH = DOLL_CONFIG.canvas.height;
-  const canvas = document.createElement('canvas');
-  canvas.width = docW;
-  canvas.height = docH;
+
+  // Delegate to the canonical naked-body composer (render.js) so the inpaint
+  // base is identical to what the active-view doll preview is showing —
+  // same layer selection (getBaseLayers: non-wardrobe + skin_wear options),
+  // same visibility toggles, same per-category/subcategory offsets. Prior
+  // implementations here used ML_BODY_EXCLUDED_CATEGORIES (an empty set)
+  // which silently composited wardrobe layers, violating the naked-body
+  // invariant and diverging from the user's active view.
+  const canvas = await generateDynamicBodyReferenceCanvas();
+
+  // Treat an empty canvas (no compositable body layers) as the trigger for
+  // the static body_ref fallback — e.g. a body_ref PNG was supplied directly
+  // without a PSD layer set.
   const ctx = canvas.getContext('2d');
+  const sample = ctx.getImageData(0, 0, Math.min(8, docW), Math.min(8, docH)).data;
+  let hasContent = false;
+  for (let i = 3; i < sample.length; i += 4) {
+    if (sample[i] !== 0) { hasContent = true; break; }
+  }
+  if (hasContent) return canvas;
+
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, docW, docH);
-
-  // Preferred path: use the pre-built naked body reference so the inpaint
-  // model sees bare skin rather than existing clothing.
   if (DOLL_CONFIG.body_ref) {
     try {
       const img = await loadImage(DOLL_CONFIG.body_ref);
       ctx.drawImage(img, 0, 0, docW, docH);
-      return canvas;
     } catch (err) {
-      console.warn('body_ref load failed, falling back to layer composite:', err);
-    }
-  }
-
-  // Fallback: composite non-wardrobe layers (old behaviour, dressed figure).
-  const layers = [...DOLL_CONFIG.layers].sort((a, b) => (a.z || 0) - (b.z || 0));
-  for (const layer of layers) {
-    if (ML_BODY_EXCLUDED_CATEGORIES.has(layer.category)) continue;
-    const src = localImageCache[layer.file];
-    if (!src) continue;
-    try {
-      const img = await loadImage(src);
-      ctx.drawImage(img, 0, 0, docW, docH);
-    } catch (err) {
-      console.warn(`ml-body: could not load ${layer.file}:`, err);
+      console.warn('body_ref load failed, returning white canvas:', err);
     }
   }
   return canvas;

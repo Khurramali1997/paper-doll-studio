@@ -421,6 +421,62 @@ async def parse_body_regions_endpoint(
     return JSONResponse({"masks": saved, "parts": list(masks.keys())})
 
 
+@app.post("/api/extract-garments")
+async def extract_garments_endpoint(
+    image: UploadFile = File(...),
+    ckpt: str = Form("24yearsold/l2d_sam_iter2"),
+    device: str = Form("cpu"),
+    smooth: bool = Form(True),
+    min_pixels: int = Form(200),
+):
+    """Run SemanticSam on a clothed image and persist per-garment RGBA cutouts.
+
+    Saves PNGs under public/assets/garment_extracts/<job_id>/<class>.png and
+    returns metadata for each extracted garment. 503 when SAM deps missing.
+    """
+    try:
+        from compiler.body_parser import extract_garments
+    except ImportError:
+        return JSONResponse({"error": "sam deps not installed"}, status_code=503)
+
+    data = await image.read()
+    try:
+        pil_img = _PILImage.open(_io.BytesIO(data)).convert("RGB")
+    except Exception as exc:
+        return JSONResponse({"error": f"could not decode image: {exc}"}, status_code=400)
+
+    try:
+        cutouts = extract_garments(
+            pil_img, ckpt=ckpt, device=device, smooth=smooth, min_pixels=min_pixels,
+        )
+    except ImportError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    job_id = uuid.uuid4().hex[:12]
+    out_dir = Path("public") / "assets" / "garment_extracts" / job_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    extracts = []
+    for slot, rgba_img in cutouts.items():
+        out_path = out_dir / f"{slot}.png"
+        rgba_img.save(str(out_path))
+        alpha = rgba_img.split()[-1]
+        bbox = alpha.getbbox()
+        pixel_count = int(sum(1 for v in alpha.getdata() if v > 0))
+        extracts.append({
+            "slot": slot,
+            "url": f"/public/assets/garment_extracts/{job_id}/{slot}.png",
+            "width": rgba_img.width,
+            "height": rgba_img.height,
+            "pixel_count": pixel_count,
+            "bbox": list(bbox) if bbox else None,
+        })
+
+    return JSONResponse({"job_id": job_id, "extracts": extracts})
+
+
 @app.get("/api/inpaint/status")
 async def inpaint_status_endpoint():
     return JSONResponse(inpaint_status())

@@ -287,6 +287,18 @@
                   <label for="txt-inpaint-prompt" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Prompt</label>
                   <textarea id="txt-inpaint-prompt" rows="3" style="width: 100%; resize: vertical; padding: 0.4rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.72rem; outline: none;">red velvet evening gown, anime cel shaded, clean edges, flat color</textarea>
                 </div>
+                <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                  <label style="font-size: 0.68rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;" title="How much of the original image the model replaces. 0.5 = subtle, 1.0 = full repaint.">
+                    Strength
+                    <input type="range" id="range-inpaint-strength" min="0.3" max="1.0" step="0.05" value="0.5" style="flex: 1;">
+                    <span id="lbl-inpaint-strength" style="min-width: 32px; text-align: right; font-variant-numeric: tabular-nums;">0.50</span>
+                  </label>
+                  <label style="font-size: 0.68rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;" title="Denoising steps. Fast mode converges in 8–12; raise to 20+ for quality.">
+                    Steps
+                    <input type="range" id="range-inpaint-steps" min="4" max="30" step="1" value="10" style="flex: 1;">
+                    <span id="lbl-inpaint-steps" style="min-width: 24px; text-align: right; font-variant-numeric: tabular-nums;">10</span>
+                  </label>
+                </div>
 
                 <details>
                   <summary style="font-size: 0.65rem; color: var(--text-secondary); cursor: pointer; list-style: none;">Advanced</summary>
@@ -299,17 +311,17 @@
                       <label class="align-control">Seed
                         <input type="number" id="num-inpaint-seed" value="93" min="0" step="1">
                       </label>
-                      <label class="align-control">Max dim
-                        <input type="number" id="txt-inpaint-max-dim" value="768" min="256" max="2048" step="8" title="Longest edge is capped to this before sending to the model. Must be divisible by 8.">
+                      <label class="align-control">Output size
+                        <input type="number" id="txt-inpaint-max-dim" value="768" min="256" max="2048" step="8" title="Diffusion always runs at 512 (SD 1.5 native res) — this is the size the result is upscaled to before saving. Defaults to the canvas dim. Must be divisible by 8.">
                       </label>
-                      <label class="align-control">Steps
-                        <input type="number" id="num-inpaint-steps" value="10" min="1" max="60" step="1">
+                      <label class="align-control">Upscaler
+                        <select id="select-inpaint-upscaler" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;" title="How the 512×512 inference output is enlarged to canvas dim. Lanczos = instant, slight softness. RealESRGAN-anime = ~5-8s, sharper cel-shaded lines (requires [upscale] extras).">
+                          <option value="lanczos">Lanczos (fast)</option>
+                          <option value="realesrgan-anime">RealESRGAN-anime (sharp)</option>
+                        </select>
                       </label>
                       <label class="align-control">CFG
                         <input type="number" id="num-inpaint-guidance" value="7" min="0" max="20" step="0.1">
-                      </label>
-                      <label class="align-control">Strength
-                        <input type="number" id="num-inpaint-strength" value="1.0" min="0.1" max="1.0" step="0.05">
                       </label>
                       <label class="align-control">Device
                         <select id="select-inpaint-device" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.7rem;">
@@ -323,7 +335,8 @@
                       </label>
                     </div>
                     <label class="switch-item"><span class="switch-label" title="DPM++ 2M Karras scheduler — converges in 10-12 steps vs 20+ for PNDM">Fast mode (DPM++)</span><input type="checkbox" id="chk-inpaint-fast" checked><span class="slider"></span></label>
-                    <label class="switch-item"><span class="switch-label" title="Canny edge ControlNet — conditions generation on body structure to help the garment conform to the body shape">Structure guidance (ControlNet)</span><input type="checkbox" id="chk-inpaint-controlnet"><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label" title="Fill 1-px brush holes with a morphological close before dilate+feather, so the model sees a well-formed mask">Smooth painted mask</span><input type="checkbox" id="chk-inpaint-smooth" checked><span class="slider"></span></label>
+                    <label class="switch-item"><span class="switch-label" title="Canny edge ControlNet — conditions generation on body structure to help the garment conform to the body shape. Mutually exclusive with IP-Adapter.">Structure guidance (ControlNet)</span><input type="checkbox" id="chk-inpaint-controlnet"><span class="slider"></span></label>
                     <div id="inpaint-controlnet-options" style="display: none; flex-direction: column; gap: 0.35rem; padding: 0.4rem; border-radius: 6px; background: rgba(120,80,255,0.06); border: 1px solid rgba(120,80,255,0.2);">
                       <div class="align-control">
                         <label for="txt-inpaint-controlnet-model" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">ControlNet model</label>
@@ -333,6 +346,18 @@
                         Conditioning scale
                         <input type="range" id="range-inpaint-controlnet-scale" min="0.1" max="1.0" step="0.05" value="0.5" style="flex: 1;">
                         <span id="lbl-inpaint-controlnet-scale" style="min-width: 28px; text-align: right;">0.5</span>
+                      </label>
+                    </div>
+                    <label class="switch-item"><span class="switch-label" title="IP-Adapter — bias generation toward a reference image (character render, garment photo, etc.). Adds ~1.3 GB at first use. Mutually exclusive with ControlNet on 16 GB hardware.">Style reference (IP-Adapter)</span><input type="checkbox" id="chk-inpaint-ip-adapter"><span class="slider"></span></label>
+                    <div id="inpaint-ip-options" style="display: none; flex-direction: column; gap: 0.35rem; padding: 0.4rem; border-radius: 6px; background: rgba(80,200,255,0.06); border: 1px solid rgba(80,200,255,0.2);">
+                      <div class="align-control">
+                        <label for="file-inpaint-ip-reference" style="font-size: 0.7rem; color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Reference image</label>
+                        <input type="file" id="file-inpaint-ip-reference" accept="image/*" style="width: 100%; padding: 0.3rem; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-glass); color: var(--text-primary); font-family: var(--font-main); font-size: 0.68rem;">
+                      </div>
+                      <label style="font-size: 0.68rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;" title="How strongly the reference image biases generation. 0.3 = subtle hint, 1.0 = strong style transfer.">
+                        Conditioning scale
+                        <input type="range" id="range-inpaint-ip-scale" min="0.3" max="1.0" step="0.05" value="0.6" style="flex: 1;">
+                        <span id="lbl-inpaint-ip-scale" style="min-width: 28px; text-align: right;">0.6</span>
                       </label>
                     </div>
                     <div class="align-control">
@@ -379,9 +404,35 @@
                 <div id="inpaint-result" style="display: none; margin-top: 0.4rem;">
                   <img id="inpaint-preview-img" width="140" height="140" style="border-radius: 6px; border: 1px solid var(--border-glass); object-fit: contain; background: rgba(255,255,255,0.04);" alt="Inpaint preview">
                   <div id="inpaint-meta" style="font-size: 0.68rem; color: var(--text-secondary); margin-top: 0.3rem;"></div>
-                  <div style="display: flex; gap: 0.5rem; margin-top: 0.4rem;">
+                  <div style="display: flex; gap: 0.5rem; margin-top: 0.4rem; flex-wrap: wrap;">
                     <button type="button" class="cleanup-tool-btn" id="btn-inpaint-to-cleanup">Send to Cleanup Workbench</button>
+                    <button type="button" class="cleanup-tool-btn" id="btn-inpaint-extract-garments" title="Run SAM on the generated composite to split out each garment as a separate cutout">Extract Garments (SAM)</button>
                   </div>
+                </div>
+              </div>
+            </details>
+
+            <!-- Garment Extraction Workbench (SAM-based) -->
+            <details class="control-group" id="details-garment-extract" style="margin-top: 0.6rem; background: rgba(255,255,255,0.02); padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+              <summary style="cursor: pointer; font-weight: 600; font-size: 0.85rem; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; list-style: none;">
+                <span>Garment Extraction Workbench</span>
+                <span style="font-size: 0.7rem; color: var(--text-secondary);">▼</span>
+              </summary>
+              <div style="margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.45rem;">
+                <div style="font-size: 0.68rem; color: var(--text-secondary);">
+                  Run SemanticSam on the last inpaint result to split out topwear, bottomwear, headwear, neckwear, handwear, legwear, and footwear as independent RGBA cutouts. Refine any one in the Cleanup Workbench.
+                </div>
+                <div style="display: flex; gap: 0.5rem;">
+                  <button type="button" class="action-btn" id="btn-garment-extract-run" style="flex: 1; padding: 0.45rem 0; font-size: 0.75rem; border-radius: 6px;">Extract from last inpaint result</button>
+                </div>
+                <div id="garment-extract-status" class="status-box stencil-status" style="display: none;"></div>
+                <div id="garment-extract-grid" style="display: none; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 0.5rem; margin-top: 0.3rem;">
+                  <!-- Cards are populated dynamically by stencils.js -->
+                </div>
+                <div id="garment-extract-actions" style="display: none; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.4rem;">
+                  <button type="button" class="cleanup-tool-btn" id="btn-garment-select-all" style="font-size: 0.66rem; padding: 0.3rem 0.5rem;">Select all</button>
+                  <button type="button" class="cleanup-tool-btn" id="btn-garment-merge-selected" disabled style="font-size: 0.66rem; padding: 0.3rem 0.5rem;">Merge selected (0)</button>
+                  <span style="font-size: 0.6rem; color: var(--text-secondary); flex: 1; min-width: 140px;">Combine cards into one cutout — useful for one-piece dresses or oversegmented outfits.</span>
                 </div>
               </div>
             </details>
