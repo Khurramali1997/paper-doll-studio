@@ -3,7 +3,7 @@ import { dilateMask, erodeMask, featherMask, keepLargestConnectedComponent } fro
 import { generateBodySilhouetteCanvas, generateBodyCompositeCanvas, generateSkinCompositeCanvas } from './export.js';
 import { canvasToBlob, downloadBlob, getBoundingBox, loadImage } from './utils.js';
 import { receiveAssetForCleanup, registerCleanupStencils } from './import.js';
-import { localImageCache } from './render.js';
+import { generateActiveViewCanvas, localImageCache } from './render.js';
 
 const STORAGE_KEY = 'paperdoll_user_stencils_v1';
 const IDB_NAME    = 'paperdoll_stencils';
@@ -915,7 +915,8 @@ function bindEvents() {
   el('btn-fabric-download-composite')?.addEventListener('click', downloadFabricComposite);
   el('btn-fabric-download-manifest')?.addEventListener('click', downloadFabricManifest);
   el('btn-inpaint-generate')?.addEventListener('click', buildInpaintGeneration);
-  el('btn-inpaint-to-cleanup')?.addEventListener('click', sendInpaintToCleanup);
+  el('btn-inpaint-to-cleanup')?.addEventListener('click', sendFullInpaintToCleanup);
+  el('btn-inpaint-mask-to-cleanup')?.addEventListener('click', sendMaskedInpaintToCleanup);
   el('btn-inpaint-extract-garments')?.addEventListener('click', () => {
     document.getElementById('details-garment-extract')?.setAttribute('open', '');
     extractGarmentsFromLastInpaint();
@@ -1632,6 +1633,17 @@ function _configureCleanupForGenerator() {
   registerCleanupStencils(editor.stencils);
 }
 
+function _configureCleanupForFullInpaint() {
+  // Full inpaint handoff is an opaque/composite guide, not a transparent cutout.
+  // Use Lane C defaults so cleanup treats it as a clothed-guide style source.
+  const lane = document.getElementById('select-cleanup-lane');
+  if (lane) {
+    lane.value = 'clothed_guide';
+    lane.dispatchEvent(new Event('change'));
+  }
+  registerCleanupStencils(editor.stencils);
+}
+
 // ─── Inpaint Garment Generator ────────────────────────────────────────────
 
 let _inpaintResult = null;
@@ -1799,11 +1811,15 @@ function initInpaintBrush() {
   el('chk-inpaint-controlnet')?.addEventListener('change', e => {
     const opts = el('inpaint-controlnet-options');
     if (opts) opts.style.display = e.target.checked ? 'flex' : 'none';
+    if (e.target.checked) _syncControlnetModelForType(false);
     // Mutex with IP-Adapter — both loaded simultaneously OOMs M-series 16 GB.
     if (e.target.checked) {
       const ip = el('chk-inpaint-ip-adapter');
       if (ip?.checked) { ip.checked = false; ip.dispatchEvent(new Event('change')); }
     }
+  });
+  el('select-inpaint-controlnet-type')?.addEventListener('change', () => {
+    _syncControlnetModelForType(true);
   });
   el('range-inpaint-controlnet-scale')?.addEventListener('input', e => {
     const lbl = el('lbl-inpaint-controlnet-scale');
@@ -1866,6 +1882,51 @@ async function maskBlobForInpaint() {
 }
 
 let _currentInpaintJobId = null;
+const CONTROLNET_MODELS = {
+  canny: 'lllyasviel/control_v11p_sd15_canny',
+  proxy_depth: 'lllyasviel/control_v11f1p_sd15_depth',
+};
+
+async function _canvasFromInpaintResult() {
+  if (!_inpaintResult?.image_b64) return null;
+  const img = await loadImage('data:image/png;base64,' + _inpaintResult.image_b64);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth || DOLL_CONFIG.canvas?.width || 768;
+  canvas.height = img.naturalHeight || DOLL_CONFIG.canvas?.height || 768;
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+async function _inpaintContextCanvas(mode = 'active_view', fallback = 'active_view') {
+  if (mode === 'last_result') {
+    const last = await _canvasFromInpaintResult();
+    if (last) return last;
+    mode = fallback;
+  }
+  if (mode === 'naked_body') return generateBodyCompositeCanvas();
+  const active = await generateActiveViewCanvas();
+  const withBg = document.createElement('canvas');
+  withBg.width = active.width;
+  withBg.height = active.height;
+  const ctx = withBg.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, withBg.width, withBg.height);
+  ctx.drawImage(active, 0, 0);
+  return withBg;
+}
+
+function _selectedControlnetType() {
+  return el('select-inpaint-controlnet-type')?.value === 'proxy_depth' ? 'proxy_depth' : 'canny';
+}
+
+function _syncControlnetModelForType(force = false) {
+  const input = el('txt-inpaint-controlnet-model');
+  if (!input) return;
+  const known = new Set(Object.values(CONTROLNET_MODELS));
+  if (force || !input.value || known.has(input.value)) {
+    input.value = CONTROLNET_MODELS[_selectedControlnetType()];
+  }
+}
 
 // Build a FormData with every UI-driven inpaint parameter wired in EXCEPT
 // the image, mask, garment_slot, and ip_reference file — callers append those
@@ -1884,6 +1945,8 @@ function _buildInpaintFormDataBase(prompt) {
   fd.append('dilate', el('range-inpaint-dilate')?.value || '6');
   fd.append('feather', el('range-inpaint-feather')?.value || '8');
   fd.append('controlnet', el('chk-inpaint-controlnet')?.checked ? 'true' : 'false');
+  fd.append('controlnet_type', _selectedControlnetType());
+  _syncControlnetModelForType(false);
   fd.append('controlnet_model', el('txt-inpaint-controlnet-model')?.value || 'lllyasviel/control_v11p_sd15_canny');
   fd.append('controlnet_scale', el('range-inpaint-controlnet-scale')?.value || '0.5');
   fd.append('ip_adapter', el('chk-inpaint-ip-adapter')?.checked ? 'true' : 'false');
@@ -1966,8 +2029,10 @@ async function _submitInpaintJob(fd) {
         const meta = el('inpaint-meta');
         if (meta) {
           const m = event.metadata || {};
-          const cnTag = m.controlnet ? ' · ControlNet' : '';
-          meta.textContent = `seed ${m.seed ?? ''} · ${m.steps ?? ''} steps${cnTag}`;
+          const cnTag = m.controlnet ? ` · ControlNet ${m.controlnet_type || 'canny'}` : '';
+          const out = Array.isArray(m.output_size) ? ` · ${m.output_size[0]}x${m.output_size[1]}` : '';
+          const up = m.upscaler ? ` · ${m.upscaler}` : '';
+          meta.textContent = `seed ${m.seed ?? ''} · ${m.steps ?? ''} steps${cnTag}${out}${up}`;
         }
         if (el('inpaint-result')) el('inpaint-result').style.display = 'block';
         setInpaintStatus('');
@@ -2005,11 +2070,12 @@ async function buildInpaintGeneration() {
   setInpaintStatus('Preparing inputs…');
 
   try {
-    const [bodyCanvas, maskBlob] = await Promise.all([
-      generateBodyCompositeCanvas(),
+    const contextMode = el('select-inpaint-context')?.value || 'active_view';
+    const [initCanvas, maskBlob] = await Promise.all([
+      _inpaintContextCanvas(contextMode, 'active_view'),
       maskBlobForInpaint(),
     ]);
-    const bodyBlob = await canvasToBlob(bodyCanvas);
+    const initBlob = await canvasToBlob(initCanvas);
 
     const fd = _buildInpaintFormDataBase(prompt);
     // If the selected mask stencil is a SAM garment region (sam:topwear etc.),
@@ -2020,7 +2086,7 @@ async function buildInpaintGeneration() {
       const slot = stencilSel.slice(4);
       if (GARMENT_SLOTS.includes(slot)) fd.append('garment_slot', slot);
     }
-    fd.append('image', bodyBlob, 'body_composite.png');
+    fd.append('image', initBlob, 'active_view.png');
     fd.append('mask', maskBlob, 'garment_mask.png');
     const ipFile = _ipReferenceFile();
     if (ipFile) fd.append('ip_reference', ipFile, ipFile.name || 'ip_reference.png');
@@ -2046,7 +2112,21 @@ async function cancelInpaintJob() {
   } catch {}
 }
 
-async function sendInpaintToCleanup() {
+async function _fullInpaintResultBlob() {
+  const res = await fetch('data:image/png;base64,' + _inpaintResult.image_b64);
+  return res.blob();
+}
+
+async function sendFullInpaintToCleanup() {
+  if (!_inpaintResult?.image_b64) return;
+  const seed = _inpaintResult.metadata?.seed ?? 'seed';
+  const blob = await _fullInpaintResultBlob();
+
+  _configureCleanupForFullInpaint();
+  await receiveAssetForCleanup(await _toCanvasSizedBlob(blob), `inpaint_full_${seed}.png`);
+}
+
+async function sendMaskedInpaintToCleanup() {
   if (!_inpaintResult?.image_b64) return;
   const seed = _inpaintResult.metadata?.seed ?? 'seed';
 
@@ -2186,7 +2266,7 @@ async function refineGarment(slot, cutoutUrl, refineBtn) {
 
   try {
     const [bodyCanvas, maskBlob] = await Promise.all([
-      generateBodyCompositeCanvas(),
+      _inpaintContextCanvas('last_result', 'naked_body'),
       _cutoutAlphaToMaskBlob(cutoutUrl),
     ]);
     const baseBlob = await canvasToBlob(bodyCanvas);
@@ -2194,7 +2274,7 @@ async function refineGarment(slot, cutoutUrl, refineBtn) {
     const fd = _buildInpaintFormDataBase(prompt);
     fd.append('garment_slot', slot);
     fd.append('crop_output', 'true');
-    fd.append('image', baseBlob, 'naked_body.png');
+    fd.append('image', baseBlob, 'refine_context.png');
     fd.append('mask', maskBlob, `${slot}_mask.png`);
     const ipFile = _ipReferenceFile();
     if (ipFile) fd.append('ip_reference', ipFile, ipFile.name || 'ip_reference.png');
